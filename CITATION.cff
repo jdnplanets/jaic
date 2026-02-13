@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the associated journal article (preferred citation) below."
+title: "<JAIC: Jupiter Auroral Ionosphere Code>"
+authors:
+  - family-names: "<Nichols>"
+    given-names: "<J. D.>"
+license: MIT
+url: "https://github.com/jdnplanets/jaic"
+
+preferred-citation:
+  type: article
+  title: "Jupiter's auroral ionosphere: Hybrid Monte Carlo, auroral spectrum and conductivity modeling"
+  authors:
+    - family-names: "Nichols"
+      given-names: "J. D."
+  journal: "Journal of Geophysical Research: Space Physics"
+  year: 2026
+  volume: "<volume>"
+  issue: "<issue>"        # optional
+  pages: "<start-end>"    # optional
+  doi: "<10.xxxx/xxxxx>"
