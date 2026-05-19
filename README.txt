@@ -10,9 +10,7 @@ JAIC is an open-source code for modelling electron precipitation and related ion
 
 This repository is archived on **Zenodo**:
 
-- **Zenodo record:** TBD
-- **DOI (concept DOI):** TBD
-- **DOI (this version):** TBD
+- **Zenodo record:** 10.5281/zenodo.18625227
 
 ---
 
@@ -23,7 +21,7 @@ If you downloaded a Zenodo ZIP, unpack it and `cd` into the extracted folder.
 
 If you are cloning from a mirror:
 ```bash
-git clone <DEV_REPO_URL>
+git clone https://github.com/jdnplanets/jaic.git
 cd <repo>
 
 
@@ -142,7 +140,8 @@ Neale, Liesl, Steven Miller, and Jonathan Tennyson. ‘Spectroscopic Properties 
 
 
 ##  Citation
-If you use JAIC in your work, please cite ... TBD
+If you use JAIC in your work, please cite 
+Nichols, J.D., Jupiter's auroral ionosphere: Hybrid Monte Carlo, auroral spectrum and conductivity modeling, J. Geophys. Res. (2026)
 
 
 ##  License
