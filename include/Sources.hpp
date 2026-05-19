@@ -17,4 +17,6 @@
 #include "UniformSource.hpp"
 #include "BrokenPowerLawSource.hpp"
 #include "BrokenPowerLawIsotropicSource.hpp"
+#include "BrokenPowerLawGaussianSource.hpp"
+#include "BrokenPowerLawGaussianIsotropicSource.hpp"
 #include "DataSource.hpp"

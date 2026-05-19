@@ -12,6 +12,8 @@
 
 #include <cmath>
 #include <algorithm>
+#include <vector>
+#include <string>
 
 #ifndef EGRID_HPP
 #define EGRID_HPP
@@ -81,6 +83,9 @@ public:
     inline double eTodE(int e) const;
     // map energy to BIN index in [0, nbins-1]
     inline int EToIndex(double E) const;
+   // Return all bin edges: LH edge of every bin plus the final RH edge.
+    // Size is nbins + 1; edges[i] == eToE(i), for i=0..nbins.
+    inline std::vector<double> getEdges() const; 
 
     // Backwards-compatible static alias: default is logarithmic
     EGRID_HD static inline int EToIndex_static(double E, int nbins_, double Emin_, double decades_);
@@ -360,6 +365,14 @@ inline double Egrid::eTodE(int e) const {
 
     if (type == EgridType::Logarithmic) return LogEgrid::eTodE_impl(e, nbins, Emin, decades);
     return LinEgrid::eTodE_impl(e, nbins, Emin, Emax);
+}
+
+inline std::vector<double> Egrid::getEdges() const {
+    std::vector<double> edges(static_cast<std::size_t>(nbins) + 1);
+    for (int e = 0; e <= nbins; ++e) {
+        edges[static_cast<std::size_t>(e)] = eToE(e);
+    }
+    return edges;
 }
 
 inline int Egrid::EToIndex(double E) const {

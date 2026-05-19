@@ -40,39 +40,40 @@ public:
     size_t nw;                   // Number of wavelength points in the output spectrum
     std::vector<double> lambda;  // Wavelength grid in μm
     double obsang = 0;           // Observation angle in degrees (0 = nadir, 90 = limb)
+    bool applyNonLTE = true;     // Whether to apply non-LTE scaling factors
 
     // File paths
     static inline const std::string jaicroot = std::string(getenv("JAIC_ROOT")) + "/";
     std::string outdir = jaicroot + "out/h3pspec/";
 
     // Constructor: Model initialization (read files, set up normalisation factors, etc.)
-    H3pColumn(Params params, std::shared_ptr<Source> src_, const World1D &world_);
+    H3pColumn(Params params, std::shared_ptr<Source> src_, const World1D &world_, bool applyNonLTE = true);
     ~H3pColumn() = default;
 
 
     std::vector<double> specout;    // Emergent spectrum at the top of the column in W m^-2 sr^-1 μm^-1
     std::vector<double> ver;        // volume emission rate vs altitude [W m^-3 sr^-1]
-    std::vector<double> q01ver;     // volume emission rate of Q(0,1-) line vs altitude [W m^-3 sr^-1]
+    std::vector<double> q10ver;     // volume emission rate of Q(1,0-) line vs altitude [W m^-3 sr^-1]
     double totef = 0.0;                 // Total observed energy flux in mW m^-2
 
     // Member functions
     void computeSpectraVsAltitude();
     void computeEmergentSpectrum();
     void computeVERvsAltitude();
-    void computeQ01VERvsAltitude();
+    void computeQ10VERvsAltitude();
     double getTotalRadiance();
     double getF335MRadiance();
     int getPeakzIndex();
     void writeVERtoFile();
-    void writeQ01VERtoFile();
+    void writeQ10VERtoFile();
     void writeEmergentSpectrumToFile();
     void run() {
         computeSpectraVsAltitude();
         computeVERvsAltitude();
-        computeQ01VERvsAltitude();
+        computeQ10VERvsAltitude();
         computeEmergentSpectrum();
         writeVERtoFile();
-        writeQ01VERtoFile();
+        writeQ10VERtoFile();
         writeEmergentSpectrumToFile();
     }
 

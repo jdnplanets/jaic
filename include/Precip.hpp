@@ -60,19 +60,16 @@ class Precip {
     std::vector<int> alive;     // boolean alive flag (0 or 1)
 
     //simulation output
-    std::vector<int> nion ;                     // number of ions produced (flattened 2D array: z * nE + e)
+    std::vector<int> colcount;                  // collision count for each collision type and energy bin (flattened 2D array: e * nCollisions + c)
+    std::vector<int> nion ;                     // number of ions produced (flattened 2D array: z * nE + e) (e at ejected energy)
     std::vector<int> theta_sampled;             // sampled scattering angle for testing
     std::vector<std::vector<double>> qion;      // ionisation rate (2D array: energy bin * altitude bin) // ptle-1 cm-1 s-1 eV-1
+    std::vector<std::vector<double>> qion1;     // ionisation rate of primaries only
     std::vector<std::vector<double>> phiPlus;   // upward electron flux as a function of energy and altitude (2D array: energy bin * altitude bin) // cm-2 s-1 eV-1
     std::vector<std::vector<double>> phiMinus;  // downward electron flux as a function of energy and altitude (2D array: energy bin * altitude bin) // cm-2 s-1 eV-1
-    std::vector<std::vector<double>> secqion;   // secondary ionisation rate as a function of energy and altitude (2D array: energy bin * altitude bin) // ptle-1 cm-1 s-1 eV-1
-    std::vector<std::vector<double>> secexB;    // secondary excitation rate for singlet B as a function of energy and altitude (2D array: energy bin * altitude bin) // ptle-1 cm-1 s-1 eV-1
-    std::vector<std::vector<double>> secexC;    // secondary excitation rate for singlet C as a function of energy and altitude (2D array: energy bin * altitude bin) // ptle-1 cm-1 s-1 eV-1
-    std::vector<std::vector<double>> secexEF;   // secondary excitation rate for singlet EF as a function of energy and altitude (2D array: energy bin * altitude bin) // ptle-1 cm-1 s-1 eV-1
-    std::vector<float> colcount;                // collision count for each collision type and energy bin (flattened 2D array: e * nCollisions + c)
-    std::vector<int> nexB;                      // number of excitations to singlet B as a function of energy and altitude (flattened 2D array: z * nE + e)
-    std::vector<int> nexC;                      // number of excitations to singlet C as a function of energy and altitude (flattened 2D array: z * nE + e)
-    std::vector<int> nexEF;                     // number of excitations to singlet E as a function of energy and altitude (flattened 2D array: z * nE + e)
+    std::vector<std::vector<double>> qion2;     // secondary ionisation rate as a function of energy and altitude (2D array: energy bin * altitude bin) // ptle-1 cm-1 s-1 eV-1
+    std::vector<std::vector<std::vector<double>>> exRates2; // secondary excitation rates for each collision type, energy bin, and altitude bin (3D array: collision type * energy bin * altitude bin) // ptle-1 cm-1 s-1 eV-1
+    std::vector<std::vector<std::vector<double>>> exRates; // total excitation rates for each collision type, energy bin, and altitude bin (3D array: collision type * energy bin * altitude bin) // ptle-1 cm-1 s-1 eV-1
 
 
 
@@ -80,6 +77,7 @@ public:
     SimParams p;   // simulation parameters
     
     std::vector<float> qz; // ionisation rate per altitude bin
+    std::vector<float> qz1; // ionisation rate per altitude bin
     std::vector<std::vector<double>> exRateB;   // excitation rate for singlet B as a function of energy and altitude (2D array: energy bin * altitude bin) // ptle-1 cm-1 s-1 eV-1
     std::vector<std::vector<double>> exRateC;   // excitation rate for singlet C as a function of energy and altitude (2D array: energy bin * altitude bin) // ptle-1 cm-1 s-1 eV-1
     std::vector<std::vector<double>> exRateEF;  // excitation rate for singlet EF as a function of energy and altitude (2D array: energy bin * altitude bin) // ptle-1 cm-1 s-1 eV-1
@@ -88,13 +86,27 @@ public:
     Precip(Params params, std::shared_ptr<Source> src_, const World1D &world_);
     ~Precip() = default;
     void initialisePrimaries() {
+        // Keep source sampling bounds aligned with the simulation energy grid.
+        sp.Emin = p.E0;
+        sp.Emax = p.Emax;
         src->init(sp, z, y, vz, vy, E, alive);
+        // Rotate velocities to align with the magnetic field dip angle
+        float theta = (90.0f - world.Bdipang) * constants::pi / 180.0f; // angle to rotate by in radians (0 = no rotation = vertical field)
+        float vz_old, vy_old;
+        for (size_t i = 0; i < sp.N; ++i) {
+            vz_old = vz[i];
+            vy_old = vy[i];
+            vz[i] = vz_old * cos(theta) - vy_old * sin(theta);
+            vy[i] = vz_old * sin(theta) + vy_old * cos(theta);
+        }
     }
 
     // Main processing functions
     void processPrimaries();
+    void writeSampledPDFToFile();
     void nionToQion();
     void writeQzToFile(bool primariesOnly = false);
+    void writeFUVExRatesToFile();
     void writeExRatesToFile();
     void writeColcountToFile();
     void writeSecQionToFile();

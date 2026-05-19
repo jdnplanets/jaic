@@ -33,6 +33,8 @@ std::unique_ptr<World1D> make_world(const std::string& name,
 {
     std::unique_ptr<World1D> w;
 
+    std::cout << "Making world: " << name << "\n";
+
     if (name == "BrownDwarf" || name == "Brown Dwarf") {
         w = std::make_unique<BrownDwarf>(BrownDwarf::Defaults());
 

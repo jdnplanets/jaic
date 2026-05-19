@@ -37,6 +37,7 @@ public:
     std::vector<float> Z;      // Altitude grid in km
     float dz;                  // Altitude step in m
     float dzcm;                // Altitude step in cm
+    int nE = 500;               // Number of energy bins for the spectrum calculation (not necessarily the same as the number of energy bins in the excitation rates, which are defined by the source)
     size_t nw;                 // Number of wavelength points in the output spectrum
     std::vector<double> lambda;// Wavelength grid in Å
     bool absorb;               // Flag to include hydrocarbons in the cross sections
@@ -101,6 +102,9 @@ protected:
     std::vector<double> n_C2H4;             // Ethylene density in cm^-3
     std::vector<double> n_C2H6;             // Ethane density in cm^-3
     std::vector<double> T   ;               // Temperature in K
+    std::vector<std::vector<double>> R_B_in ;  // Excitation rates for the B state, in cm^-3 s^-1, indexed by [z][E] read in
+    std::vector<std::vector<double>> R_C_in ;  // Excitation rates for the C state, in cm^-3 s^-1, indexed by [z][E] read in
+    std::vector<std::vector<double>> R_E_in ;  // Excitation rates for the E state, in cm^-3 s^-1, indexed by [z][E] read in
     std::vector<std::vector<double>> R_B ;  // Excitation rates for the B state, in cm^-3 s^-1, indexed by [z][E]
     std::vector<std::vector<double>> R_C ;  // Excitation rates for the C state, in cm^-3 s^-1, indexed by [z][E]
     std::vector<std::vector<double>> R_E ;  // Excitation rates for the E state, in cm^-3 s^-1, indexed by [z][E]
@@ -112,6 +116,7 @@ protected:
 
     const World1D &world;
     Egrid energyGrid; // energy grid for excitation bins
+    Egrid h2specEGrid; // energy grid for spectrum calculation
 
     // Structure to hold cross section data for hydrocarbons
     struct CnHnXSectData {
@@ -143,6 +148,8 @@ protected:
     HydrocarbonCrossSections getCrossSections(double wavelength,
                                                 const std::vector<CnHnXSectData>& xsData)
     ;
+
+    void rebinExcitationRates();
 
 
 };

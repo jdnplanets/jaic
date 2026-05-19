@@ -68,32 +68,52 @@ void IonDensity::readIonisationRates(Params& params,
 
     std::string line;
     int z = 0;
+    bool isNewFormat = false;
+
+    // Peek at the first non-comment line to determine format
+    while (std::getline(infile, line)) {
+        const auto first = line.find_first_not_of(" \t\r\n");
+        if (first == std::string::npos) continue;
+        if (line[first] == '#') {
+            isNewFormat = true;
+            continue;
+        }
+        // First data line found, rewind and reprocess
+        infile.clear();
+        infile.seekg(0);
+        break;
+    }
+
+    if (isNewFormat) {
+        std::cout << "Detected new ionization rates file format (with z column)\n";
+    } else {
+        std::cout << "Detected old ionization rates file format (no z column)\n";
+    }
 
     while (std::getline(infile, line)) {
-
-        // Trim leading spaces
         const auto first = line.find_first_not_of(" \t\r\n");
-        if (first == std::string::npos) continue;          // blank
-        if (line[first] == '#') continue;                  // header
+        if (first == std::string::npos) continue;
+        if (line[first] == '#') continue;
 
         std::istringstream iss(line);
 
-        int Zkm = -1;
-        double q = 0.0;
-
-        if (!(iss >> Zkm >> q)) {
-            // If the line isn't parseable, skip it
-            continue;
+        if (isNewFormat) {
+            double Zkm = 0.0;
+            double q = 0.0;
+            double q1 = 0.0; // contribution from primaries only. Ignored here.
+            if (!(iss >> Zkm >> q >> q1)) continue;
+            if (Zkm < world.Z0 || Zkm >= world.Z1) {
+                throw std::runtime_error(
+                    "Ionisation rates file has out-of-range z_index=" + std::to_string(Zkm) +
+                    " (world.Z0=" + std::to_string(world.Z0) + ", world.Z1=" + std::to_string(world.Z1) + ") in " + filename
+                );
+            }
+            Qtot[z] = static_cast<float>(q);
+        } else {
+            double q = 0.0;
+            if (!(iss >> q)) continue;
+            Qtot[z] = static_cast<float>(q);
         }
-
-        if (Zkm < world.Z0 || Zkm >= world.Z1) {
-            throw std::runtime_error(
-                "Ionisation rates file has out-of-range z_index=" + std::to_string(Zkm) +
-                " (world.Z0=" + std::to_string(world.Z0) + ", world.Z1=" + std::to_string(world.Z1) + ") in " + filename
-            );
-        }
-
-        Qtot[z] = static_cast<float>(q);
         ++z;
     }
 
@@ -101,7 +121,6 @@ void IonDensity::readIonisationRates(Params& params,
         throw std::runtime_error("No ionisation rate data rows found in: " + filename);
     }
 
-    // Scale the ionization rates by the number flux
     for (int z = 0; z < world.nz; ++z) {
         Qtot[z] *= F;
     }
@@ -168,7 +187,7 @@ void IonDensity::writeIonDensityToFile() const {
         world.nz,
         [&](int z, std::ostream& os, int w) {
             os << std::right
-               << std::setw(w) << static_cast<int>(world.Z[z]/1e3)  << " "
+               << std::setw(w) << world.Z[z]/1e3  << " "
                << std::setw(w) << Qtot[z]          << " "
                << std::setw(w) << world.nH3p[z]    << " "
                << std::setw(w) << world.nCH5p[z]   << " "

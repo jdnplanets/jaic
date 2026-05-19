@@ -36,12 +36,14 @@ using namespace std;
 
 
 // Constructor: Model initialization (read files, set up normalisation factors, etc.)
-H3pColumn::H3pColumn(Params params, std::shared_ptr<Source> src_, const World1D &world_): 
-                sp(params), src(src_), world(world_) {
+H3pColumn::H3pColumn(Params params, std::shared_ptr<Source> src_, const World1D &world_, bool applyNonLTE): 
+                sp(params), src(src_), world(world_), applyNonLTE(applyNonLTE) {
 
     // Here we perform initialization that is not specific to a given run
     // For example, initialize g_J and E_J.
     cout << "Initializing H3pColumn..." << endl;
+
+    this->applyNonLTE = applyNonLTE;
 
     Z = world.Z;    // Altitude grid in m
     nz = world.nz;  // Number of altitude bins
@@ -55,7 +57,7 @@ H3pColumn::H3pColumn(Params params, std::shared_ptr<Source> src_, const World1D 
     nw = H3pspec.num_points;
     specout.assign(nw, 0.0);
     ver.assign(nz, 0.0);
-    q01ver.assign(nz, 0.0);
+    q10ver.assign(nz, 0.0);
 
     // output file path
     outdir += sp.runid+"/";
@@ -70,9 +72,11 @@ H3pColumn::H3pColumn(Params params, std::shared_ptr<Source> src_, const World1D 
     H3pspecvz.clear();
 
     // compute non-LTE scaling factors
-    nonLTEs.resize(nz, 1.0);
-    for (size_t z = 0; z < nz; z++) {
-        nonLTEs[z] = getNonLTEScalingFactor(z);
+    if (applyNonLTE) {
+        nonLTEs.resize(nz, 1.0);
+        for (size_t z = 0; z < nz; z++) {
+            nonLTEs[z] = getNonLTEScalingFactor(z);
+        }
     }
 }
 
@@ -149,6 +153,9 @@ double H3pColumn::getNonLTEScalingFactor(size_t z) {
     return value;
 }
 
+// Function to compute the H3+ emission spectrum at each altitude layer, applying non-LTE scaling factors
+// Spctrum is computed in W m^-2 sr^-1 μm^-1 for a 1 m slab, and lambda is in μm
+// If nonLTE is true, applies the non-LTE scaling factors to the spectrum at each altitude.
 void H3pColumn::computeSpectraVsAltitude() {
 
     for (size_t z = 0; z < nz; z++) {
@@ -157,9 +164,11 @@ void H3pColumn::computeSpectraVsAltitude() {
         cout << "\rComputing spectrum for z = " << Z[z]/1e3 << " km" << flush;
         vector<double> spec;
         spec.assign(nw, 0.0); // Initialize the spectrum for this altitude
-        H3pspec.generate(T[z], n_H3p[z], lambda, spec); // spec in W m^-2 sr^-1 μm^-1 for 1 m slab
-        for (size_t i = 0; i < nw; i++) 
-            spec[i] *= nonLTEs[z]; // Apply non-LTE scaling factor uniformly to all wavelengths - a big approximation!
+        H3pspec.generate(T[z], n_H3p[z], lambda, spec); // spec in W m^-2 sr^-1 μm^-1 for 1 m slab, lambda in μm
+        if (applyNonLTE) {
+            for (size_t i = 0; i < nw; i++) 
+                spec[i] *= nonLTEs[z]; // Apply non-LTE scaling factor uniformly to all wavelengths - a big approximation!
+        }
         
 
         H3pspecvz.push_back(spec);
@@ -182,16 +191,16 @@ void H3pColumn::computeVERvsAltitude() {
 }
 
 
-// Function to compute the volume emission rate of the Q(0,1-) line in W m-3 sr-1 versus altitude
-void H3pColumn::computeQ01VERvsAltitude() {
+// Function to compute the volume emission rate of the Q(1,0-) line in W m-3 sr-1 versus altitude
+void H3pColumn::computeQ10VERvsAltitude() {
 
         for (size_t z = 0; z < nz; z++) {
             double sum = 0.0;
             for (size_t w = 0; w < H3pspecvz[z].size(); w++) {
-                if (lambda[w] >= 3.948 && lambda[w] <= 3.958) // Q(0,1-) line
+                if (lambda[w] >= 3.948 && lambda[w] <= 3.958) // Q(1,0-) line @ 3.953 μm
                     sum += H3pspecvz[z][w] * H3pspec.d_lambda;
             }
-            q01ver[z] = sum;
+            q10ver[z] = sum;
         }
 
 }
@@ -293,7 +302,7 @@ void H3pColumn::writeVERtoFile() {
         static_cast<int>(nz),
         [&](int i, std::ostream& os, int w) {
             os << std::right
-               << std::setw(w) << static_cast<int>(Z[i] / 1e3) << " "
+               << std::setw(w) << Z[i] / 1e3 << " "
                << std::setw(w) << ver[i];
         },
         colw,
@@ -306,29 +315,8 @@ void H3pColumn::writeVERtoFile() {
 }
 
 
-// void H3pColumn::writeQ01VERtoFile() {
-//     stringstream ss;
-//     if (!src) { cerr << "Error: src is null" << endl;return; }
-//     string suf = src->label(sp);
-//     ss << outdir << "H3pq01ver_" << suf << ".dat";
-//     string filename = ss.str();
-//     ofstream outFile(filename, ios::trunc);
-//     if (!outFile) {
-//         cerr << "Error opening file for writing: " + filename << endl;
-//         return;
-//     }
-//     cout << "Writing VER to file: " << filename << endl;
 
-//     for (size_t i = 0; i < nz; ++i) {
-//         outFile << Z[i]/1e3 << " " << q01ver[i] << endl;
-//     }
-
-
-//     outFile.close();
-// }
-
-
-void H3pColumn::writeQ01VERtoFile() {
+void H3pColumn::writeQ10VERtoFile() {
     if (!src) {
         std::cerr << "Error: src is null\n";
         return;
@@ -336,14 +324,14 @@ void H3pColumn::writeQ01VERtoFile() {
 
     std::stringstream ss;
     const std::string suf = src->label(sp);
-    ss << outdir << "H3pq01ver_" << suf << ".dat";
+    ss << outdir << "H3pq10ver_" << suf << ".dat";
     const std::string filename = ss.str();
 
-    std::cout << "Writing Q(0,1-) VER to file: " << filename << "\n";
+    std::cout << "Writing Q(1,0-) VER to file: " << filename << "\n";
 
     std::vector<utils::io::MetaLine> meta = {
         {"run_ID", sp.runid},
-        {"quantity", "H3+ Q(0,1-) VER"},
+        {"quantity", "H3+ Q(1,0-) VER"},
         {"layout", "rows=z_index (0..nz-1)"},
         {"nz", std::to_string(nz)},
         {"Zgrid_type", "linear"},
@@ -353,52 +341,31 @@ void H3pColumn::writeQ01VERtoFile() {
         {"VER units", " W m-3 sr-1"} // adjust if different
     };
 
-    const std::vector<std::string> cols = {"Z [km]", "Q(0,1-) VER [W m-3 sr-1]"};
+    const std::vector<std::string> cols = {"Z [km]", "Q(1,0-) VER [W m-3 sr-1]"};
 
     const int colw = 14;
     const int precision = 6;
 
     const bool ok = utils::io::write_dat_table_fixed_width(
         filename,
-        "H3pColumn model output: H3+ Q(0,1-) line volume emission rate (VER)",
+        "H3pColumn model output: H3+ Q(1,0-) line volume emission rate (VER)",
         meta,
         cols,
         static_cast<int>(nz),
         [&](int i, std::ostream& os, int w) {
             os << std::right
-               << std::setw(w) << static_cast<int>(Z[i] / 1e3) << " "
-               << std::setw(w) << q01ver[i];
+               << std::setw(w) << Z[i] / 1e3 << " "
+               << std::setw(w) << q10ver[i];
         },
         colw,
         precision
     );
 
     if (!ok) {
-        std::cerr << "Failed to write H3p Q(0,1-) VER to " << filename << "\n";
+        std::cerr << "Failed to write H3p Q(1,0-) VER to " << filename << "\n";
     }
 }
 
-
-
-// void H3pColumn::writeEmergentSpectrumToFile() {
-//     stringstream ss;
-//     if (!src) { cerr << "Error: src is null" << endl;return; }
-//     string suf = src->label(sp);
-//     ss << outdir << "H3pspecout_" << suf << ".dat";
-//     string filename = ss.str();
-//     ofstream outFile(filename, ios::trunc);
-//     if (!outFile) {
-//         cerr << "Error opening file for writing: " + filename << endl;
-//         return;
-//     }
-//     cout << "Writing emergent spectrum to file: " << filename << endl;
-
-//     for (size_t i = 0; i < nw; ++i) {
-//         outFile << lambda[i] << " " << specout[i] << endl;
-//     }
-
-//     outFile.close();
-// }
 
 
 void H3pColumn::writeEmergentSpectrumToFile() {

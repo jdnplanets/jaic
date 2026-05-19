@@ -26,6 +26,7 @@ The class relies on the World1D model for atmospheric properties and a Source fo
 #include "H2Column.hpp"
 #include "Egrid.hpp"
 #include "FileIO.hpp"
+#include "ArrayOps.hpp"
 
 
 using namespace std;
@@ -93,39 +94,88 @@ H2Column::H2Column(Params params, std::shared_ptr<Source> src_, const World1D &w
         }
     }
 
-    // Build default energy grid from simparams defaults
+    // Build default energy grid from simparams defaults and the grid to be used here
     {
         SimParams spSim; // use parameters from simparams.h
         energyGrid = Egrid::fromEminEmax(spSim.nbinsE, static_cast<double>(spSim.E0), static_cast<double>(spSim.E0) * std::pow(10.0, static_cast<double>(spSim.decades)));
+        h2specEGrid = Egrid::fromEminEmax(nE, static_cast<double>(spSim.E0), static_cast<double>(spSim.E0) * std::pow(10.0, static_cast<double>(spSim.decades)));
     }
+
 }
 
- void H2Column::setExcitationRates(vector<vector<double>>& RB, vector<vector<double>>& RC, vector<vector<double>>& RE, const double F) {
-        R_B = RB;
-        R_C = RC;
-        R_E = RE;
 
-        // If the excitation-energy axis doesn't match our current energy grid, adjust it now.
-        if (!R_B.empty()) {
-            size_t nbinsE_from_rates = R_B[0].size();
-            if (static_cast<int>(nbinsE_from_rates) != energyGrid.nbins) {
-                // Rebuild energyGrid to match the rates (use SimParams defaults for Emin/decades)
-                SimParams spSim;
-                energyGrid = Egrid::fromEminEmax(static_cast<int>(nbinsE_from_rates), static_cast<double>(spSim.E0), static_cast<double>(spSim.E0) * std::pow(10.0, static_cast<double>(spSim.decades)));
-            }
-        }
-
-        if (F != 1.0) {
-            for (size_t i = 0; i < R_B.size(); ++i) {
-                for (size_t j = 0; j < R_B[i].size(); ++j) {
-                    R_B[i][j] *= F;
-                    R_C[i][j] *= F;
-                    R_E[i][j] *= F;
-                }
-            }
-        }
-        
+void H2Column::rebinExcitationRates(){
+    std::cout << "Rebinning excitation rates from " << energyGrid.nbins << " to " << h2specEGrid.nbins << " energy bins.\n";
+    std::vector<double> old_Edges = energyGrid.getEdges();
+    std::vector<double> new_Edges = h2specEGrid.getEdges();
+    R_B.assign(nz, std::vector<double>(h2specEGrid.nbins, 0.0));
+    R_C.assign(nz, std::vector<double>(h2specEGrid.nbins, 0.0));
+    R_E.assign(nz, std::vector<double>(h2specEGrid.nbins, 0.0));
+    for (int z = 0; z < nz; ++z) {
+        R_B[z] = utils::array::rebin_conservative(old_Edges, R_B_in[z], new_Edges);
+        R_C[z] = utils::array::rebin_conservative(old_Edges, R_C_in[z], new_Edges);
+        R_E[z] = utils::array::rebin_conservative(old_Edges, R_E_in[z], new_Edges);
     }
+
+    if (!R_B_in.empty() && !R_B.empty()) {
+        const int zrep = nz > 0 ? nz / 2 : 0;
+        const std::vector<double>& oldRow = R_B_in[zrep];
+        const std::vector<double>& newRow = R_B[zrep];
+
+        double oldSum = 0.0;
+        for (double v : oldRow) oldSum += v;
+
+        double newSum = 0.0;
+        for (double v : newRow) newSum += v;
+
+        std::cout << "Representative R_B row (z=" << zrep << ")\n";
+        std::cout << "old R_B row (" << oldRow.size() << " bins): ";
+        for (double v : oldRow) std::cout << v << " ";
+        std::cout << "\nnew R_B row (" << newRow.size() << " bins): ";
+        for (double v : newRow) std::cout << v << " ";
+        std::cout << "\nold sum = " << oldSum << ", new sum = " << newSum << "\n";
+    }
+
+
+}
+
+
+ void H2Column::setExcitationRates(vector<vector<double>>& RB, vector<vector<double>>& RC, vector<vector<double>>& RE, const double F) {
+    
+    R_B_in = RB;
+    R_C_in = RC;
+    R_E_in = RE;
+
+    // If the excitation-energy axis doesn't match our current energy grid, adjust it now.
+    if (!R_B_in.empty()) {
+        size_t nbinsE_from_rates = R_B_in[0].size();
+        if (static_cast<int>(nbinsE_from_rates) != energyGrid.nbins) {
+            // Rebuild energyGrid to match the rates (use SimParams defaults for Emin/decades)
+            SimParams spSim;
+            energyGrid = Egrid::fromEminEmax(static_cast<int>(nbinsE_from_rates), static_cast<double>(spSim.E0), static_cast<double>(spSim.E0) * std::pow(10.0, static_cast<double>(spSim.decades)));
+        }
+    }
+
+    if (F != 1.0) {
+        for (size_t i = 0; i < R_B_in.size(); ++i) {
+            for (size_t j = 0; j < R_B_in[i].size(); ++j) {
+                R_B_in[i][j] *= F;
+                R_C_in[i][j] *= F;
+                R_E_in[i][j] *= F;
+            }
+        }
+    }
+  
+    if (energyGrid.nbins != h2specEGrid.nbins) {
+        
+        rebinExcitationRates();
+
+    } else {
+        R_B = R_B_in;
+        R_C = R_C_in;
+        R_E = R_E_in;
+    }
+}
 
 // Function to read excitation rates from a file
 void H2Column::readExcitationRates(const Params &params,
@@ -134,7 +184,7 @@ void H2Column::readExcitationRates(const Params &params,
 {
     const std::string basepath = "out/precip/" + params.runid + "/";
     const std::string suf = src->label(sp);
-    const std::string filename = basepath + "exrates_" + suf + ".dat";
+    const std::string filename = basepath + "exratesFUV_" + suf + ".dat";
 
     std::ifstream infile(filename);
     if (!infile.is_open()) {
@@ -144,9 +194,9 @@ void H2Column::readExcitationRates(const Params &params,
     const int nbinsE = energyGrid.nbins;
     const int nz_expected = nz;
 
-    R_B.assign(nz_expected, std::vector<double>(nbinsE, 0.0));
-    R_C.assign(nz_expected, std::vector<double>(nbinsE, 0.0));
-    R_E.assign(nz_expected, std::vector<double>(nbinsE, 0.0));
+    R_B_in.assign(nz_expected, std::vector<double>(nbinsE, 0.0));
+    R_C_in.assign(nz_expected, std::vector<double>(nbinsE, 0.0));
+    R_E_in.assign(nz_expected, std::vector<double>(nbinsE, 0.0));
 
     std::string line;
     int z = 0;
@@ -170,9 +220,9 @@ void H2Column::readExcitationRates(const Params &params,
                     " (expected " + std::to_string(3 * nbinsE) + " numbers)."
                 );
             }
-            R_B[z][e] = b;
-            R_C[z][e] = c;
-            R_E[z][e] = eF;
+            R_B_in[z][e] = b;
+            R_C_in[z][e] = c;
+            R_E_in[z][e] = eF;
 
         }
 
@@ -190,13 +240,26 @@ void H2Column::readExcitationRates(const Params &params,
     // Scale by number flux
     for (int iz = 0; iz < nz_expected; ++iz) {
         for (int ie = 0; ie < nbinsE; ++ie) {
-            R_B[iz][ie] *= F;
-            R_C[iz][ie] *= F;
-            R_E[iz][ie] *= F;
+            R_B_in[iz][ie] *= F;
+            R_C_in[iz][ie] *= F;
+            R_E_in[iz][ie] *= F;
         }
     }
 
     std::cout << "Excitation rates read successfully from " << filename << "\n";
+
+
+    if (energyGrid.nbins != h2specEGrid.nbins) {
+        
+        rebinExcitationRates();
+        
+    } else {
+        R_B = R_B_in;
+        R_C = R_C_in;
+        R_E = R_E_in;
+    }
+
+
 }
 
 
@@ -204,6 +267,7 @@ void H2Column::readExcitationRates(const Params &params,
 // Spectrum units are photons cm^-2 s^-1 radiating into 4π sr
 void H2Column::computeSpectraVsAltitude() {
 
+    double threshmod = energyGrid.nbins / static_cast<double>(h2specEGrid.nbins); // This is a heuristic threshold modifier to skip energy levels with negligible excitation rates. We scale it by the ratio of the number of energy bins in the input rates to the number of energy bins in the h2spec model, since if we are rebinning from a finer grid
     for (size_t z = 0; z < nz; z++) {
 
         cout << "\rComputing spectrum for z = " << Z[z]/1e3 << " km" << flush;
@@ -211,16 +275,16 @@ void H2Column::computeSpectraVsAltitude() {
         spec.assign(nw, 0.0); // Initialize the spectrum for this altitude
         size_t nE = R_B[z].size(); // Number of energy levels
         // Ensure the rates' energy axis matches our energyGrid; warn if not.
-        if (static_cast<int>(nE) != energyGrid.nbins) {
-            cerr << "Warning: excitation rates energy axis (" << nE << ") does not match energyGrid.nbins (" << energyGrid.nbins << ").\n";
+        if (static_cast<int>(nE) != h2specEGrid.nbins) {
+            cerr << "Warning: excitation rates energy axis (" << nE << ") does not match h2specEGrid.nbins (" << h2specEGrid.nbins << ").\n";
         }
         for (size_t e = 0; e < nE; e++) {
-            if (R_B[z][e] < 1e-2) {
+            if (R_B[z][e] < 1e-2 * threshmod) {
                 continue; // Skip if B excitation is negligible
             }
             vector<double> specE;
             specE.assign(nw, 0.0);
-            double E = energyGrid.eToE(static_cast<int>(e));
+            double E = h2specEGrid.eToE(static_cast<int>(e));
             h2spec.generate(T[z], E, R_B[z][e], R_C[z][e], R_E[z][e], lambda, specE);
 
             // Add the contribution from this energy level to the spectrum
@@ -454,7 +518,7 @@ void H2Column::writeVERtoFile() {
         static_cast<int>(nz),
         [&](int i, std::ostream& os, int w) {
             os << std::right
-               << std::setw(w) << static_cast<int>(Z[i] / 1e3) << " "
+               << std::setw(w) << Z[i] / 1e3 << " "
                << std::setw(w) << ver[i];
         },
         colw,
@@ -506,7 +570,7 @@ void H2Column::writeVEReVtoFile() {
         static_cast<int>(nz),
         [&](int i, std::ostream& os, int w) {
             os << std::right
-               << std::setw(w) << static_cast<int>(Z[i] / 1e3) << " "
+               << std::setw(w) << Z[i] / 1e3 << " "
                << std::setw(w) << ver_eV[i];
         },
         colw,

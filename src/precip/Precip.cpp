@@ -22,10 +22,10 @@ and provides methods for running the simulation and processing the results.
 #include <iostream>
 #include <fstream>
 #include <stdexcept>
-#include <numeric>  // For accumulate
+#include <numeric> 
 #include <random>
 #include <sstream>
-#include <iomanip> // For std::setw
+#include <iomanip> /
 #include <algorithm> 
 #include <filesystem>
 #include <vector>
@@ -33,6 +33,7 @@ and provides methods for running the simulation and processing the results.
 #include <iostream>
 #include "Precip.hpp"
 #include "FileIO.hpp"
+#include "ArrayOps.hpp"
 #include "device_arrays.h"
 
 
@@ -48,11 +49,14 @@ Precip::Precip(Params params, std::shared_ptr<Source> src_, const World1D &world
                 sp(params), src(std::move(src_)), world(world_)
 {
 
+
     cout << endl;
     cout << "*************** Starting the auroral precipitation simulation ***************" << endl;
     cout << "Running with the following parameters:" << endl;
     cout << endl;
+    cout << "Simulation run ID: " << sp.runid << endl;
     cout << src->banner(sp) << endl;
+    cout << "Source label: " << src->label(sp) << endl;
     cout << "Number of primary electrons: " << sp.N << endl;
     cout << "Initial altitude of primary electrons: " << sp.Zinit/1e3 << " km" << endl;
     cout << "Initial energy of primary electrons: " << sp.Einit << " eV" << endl;
@@ -69,6 +73,8 @@ Precip::Precip(Params params, std::shared_ptr<Source> src_, const World1D &world
     p.N =       sp.N;       // Number of particles
     p.Einit =   sp.Einit;   // Initial energy in eV
     p.Zinit =   sp.Zinit;   // Initial position in m
+
+    std::cout << "Simulation domain: " << p.Z0/1e3 << " km to " << p.Z1/1e3 << " km, with " << p.nbinsZ << " bins of size " << p.dz/1e3 << " km" << std::endl;
 
     // Initialize energy grid from simulation parameters defined in simparams.h
     p.update_derived();
@@ -87,19 +93,22 @@ Precip::Precip(Params params, std::shared_ptr<Source> src_, const World1D &world
 
     // Initialize the simulation variables
     dt = vector<float>(sp.N, 1e-10f);
+    colcount = vector<int>(p.nCollisions * p.nbinsZ * p.nbinsE, 0); // collision count [c][z][e] for each collision type, energy bin, and altitude bin
+
     nion = vector<int>(p.nbinsZ * p.nbinsE, 0);
     qion = vector<vector<double>>(p.nbinsE, vector<double>(p.nbinsZ, 0.0));
+    qion1 = vector<vector<double>>(p.nbinsE, vector<double>(p.nbinsZ, 0.0));
     qz = vector<float>(p.nbinsZ, 0.0f); // ionisation rate per altitude bin
-    colcount = vector<float>(p.nbinsE * p.nCollisions, 0.0f);
-    nexB = vector<int>(p.nbinsZ*p.nbinsE, 0); // number of excitations to singlet B
-    nexC = vector<int>(p.nbinsZ*p.nbinsE, 0); // number of excitations to singlet C
-    nexEF = vector<int>(p.nbinsZ*p.nbinsE, 0); // number of excitations to singlet E
+    qz1 = vector<float>(p.nbinsZ, 0.0f); // ionisation rate from primaries per altitude bin
+    exRates = vector<vector<vector<double>>>(p.nCollisions, vector<vector<double>>(p.nbinsZ, vector<double>(p.nbinsE, 0.0))); // collision rates for each collision type, energy bin, and altitude bin (3D array: collision type * energy bin * altitude bin) // s-1 eV-1
+    
+    // These are for input to other modules
     exRateB = vector<vector<double>>(p.nbinsZ, vector<double>(p.nbinsE, 0.0)); // Excitation rate for singlet B
     exRateC = vector<vector<double>>(p.nbinsZ, vector<double>(p.nbinsE, 0.0)); // Excitation rate for singlet C
     exRateEF = vector<vector<double>>(p.nbinsZ, vector<double>(p.nbinsE, 0.0)); // Excitation rate for singlet E
 
+    
     nH2 = world.nH2;
-
 
 
     // Define vector that holds the cross section data for all collisions
@@ -111,66 +120,93 @@ Precip::Precip(Params params, std::shared_ptr<Source> src_, const World1D &world
     }
     cout << "Loading cross section data from " << sigfile << endl;
     string sigmasE_file = datadir + sigfile;
-    sigmasE = vector<float>(p.nE * p.nCollisions, 0.0f);  // cross section data - all cross sections for all energies
+    sigmasE = vector<float>(p.nE * p.nCollisions, 0.0f);  // cross section data - all cross sections for all runtime energies
+    std::vector<float> sigmasE_in = std::vector<float>(p.nE_in * p.nCollisions, 0.0f);  // cross sections on input grid
     utils::io::readFloatBinaryfileData(sigmasE_file, 
-                            &sigmasE[0], 
-                            p.nE, 
+                            &sigmasE_in[0], 
+                            p.nE_in, 
                             p.nCollisions);
 
     
     // Saved data are in 10^-16 cm^2. convert to cm^2
-    for (int i = 0; i < p.nE; i++) {
+    for (int i = 0; i < p.nE_in; i++) {
         for (int j = 0; j < p.nCollisions; j++) {
-            // sigmasE[i * p.nCollisions + j] = 10e-16f;
-            sigmasE[i * p.nCollisions + j] *= 1e-16; // cm^2
+            sigmasE_in[i * p.nCollisions + j] *= 1e-16; // cm^2
         }
     }
 
-    // Calculate the total cross section for each energy
-    total_sigma = vector<float>(p.nE, 0.0f);
-    for (int i = 0; i < p.nE; i++) {
-        float sigsum = 0;
-        for (int j = 0; j < p.nCollisions; j++) {
-            sigsum += sigmasE[i * p.nCollisions + j];
-        }
-        total_sigma[i] = sigsum;
-    }
     sigmas = vector<float>(p.nCollisions, 0.0f);  // cross section data - all cross sections for a single energy to be populated in the kernel    
+
+
+    // Now, if necessary, we need to interpolate the cross section data from the input energy grid 
+    // (which is logarithmic with 6 decades and 100 bins) onto the runtime energy grid 
+    // (which may be linear or logarithmic, depending on the parameters).
 
     // If the runtime energy grid is linear, resample the cross sections
     // (which are defined on a 6-decade logarithmic grid) onto the linear grid.
     if (energyGrid.type == EgridType::Linear) {
-        Egrid logGrid(p.nE, 6.0, 1.0, EgridType::Logarithmic);
+        Egrid EGrid_in(p.nE_in, p.decades_in, p.E0_in, p.egridType_in);
         std::vector<float> sig_interp(sigmasE.size(), 0.0f);
         for (int e = 0; e < p.nE; ++e) {
             // energy at linear bin center
             double E_lin = energyGrid.eToEcg(e);
-            int idx = logGrid.EToIndex(E_lin);
-            int idx2 = std::min(idx + 1, p.nE - 1);
-            double Ea = logGrid.eToE(idx);
-            double Eb = logGrid.eToE(idx2);
+            int idx = EGrid_in.EToIndex(E_lin);
+            int idx2 = std::min(idx + 1, p.nE_in - 1);
+            double Ea = EGrid_in.eToE(idx);
+            double Eb = EGrid_in.eToE(idx2);
             double w = 0.0;
             if (Eb > Ea) w = (E_lin - Ea) / (Eb - Ea);
             for (int c = 0; c < p.nCollisions; ++c) {
-                double sa = sigmasE[idx * p.nCollisions + c];
-                double sb = sigmasE[idx2 * p.nCollisions + c];
+                double sa = sigmasE_in[idx * p.nCollisions + c];
+                double sb = sigmasE_in[idx2 * p.nCollisions + c];
                 double val = (1.0 - w) * sa + w * sb;
                 sig_interp[e * p.nCollisions + c] = static_cast<float>(val);
             }
         }
         sigmasE.swap(sig_interp);
 
-
-        // Recompute total_sigma on the resampled data
-        for (int i = 0; i < p.nE; i++) {
-            float sigsum = 0.0f;
-            for (int j = 0; j < p.nCollisions; j++) {
-            
-                sigsum += sigmasE[i * p.nCollisions + j];
+    } else {
+        // Non-linear energy grid: interpolate sigmasE from input grid to runtime grid
+        if (p.nE != p.nE_in) {
+            Egrid EGrid_in(p.nE_in, p.decades_in, p.E0_in, p.egridType_in);
+            std::vector<float> sig_interp(sigmasE.size(), 0.0f);
+            for (int e = 0; e < p.nE; ++e) {
+                // energy at runtime bin center
+                double E = energyGrid.eToEcg(e);
+                int idx = EGrid_in.EToIndex(E);
+                int idx2 = std::min(idx + 1, p.nE_in - 1);
+                double Ea = EGrid_in.eToE(idx);
+                double Eb = EGrid_in.eToE(idx2);
+                double w = 0.0;
+                if (Eb > Ea) w = (E - Ea) / (Eb - Ea);
+                for (int c = 0; c < p.nCollisions; ++c) {
+                    double sa = sigmasE_in[idx * p.nCollisions + c];
+                    double sb = sigmasE_in[idx2 * p.nCollisions + c];
+                    double val = (1.0 - w) * sa + w * sb;
+                    sig_interp[e * p.nCollisions + c] = static_cast<float>(val);
+                }
             }
-            total_sigma[i] = sigsum;
+            sigmasE.swap(sig_interp);
+        } else {
+            // Runtime energy grid is the same as input energy grid: just copy the data
+            sigmasE = sigmasE_in;
         }
+
     }
+
+    // Calculate the total cross section for each energy
+    total_sigma = vector<float>(p.nE, 0.0f);
+    for (int i = 0; i < p.nE; i++) {
+        float sigsum = 0.0f;
+        for (int j = 0; j < p.nCollisions; j++) {
+        
+            sigsum += sigmasE[i * p.nCollisions + j];
+        }
+        total_sigma[i] = sigsum;
+    }
+
+
+
 
     string scatter_file;
     if (p.decades == 7.0f) {
@@ -181,39 +217,64 @@ Precip::Precip(Params params, std::shared_ptr<Source> src_, const World1D &world
     cout << "Loading scatter angle data from " << scatter_file << endl;
     string scatter_angle_pdf_file = datadir + scatter_file;
     scatter_angle_pdf = vector<float>(p.nTheta * p.nE, 0.0f);
+    std::vector<float> scatter_angle_pdf_in = std::vector<float>(p.nTheta * p.nE_in, 0.0f);
     utils::io::readFloatBinaryfileData(scatter_angle_pdf_file, 
-                            &scatter_angle_pdf[0], 
+                            &scatter_angle_pdf_in[0], 
                             p.nTheta, 
-                            p.nE);
+                            p.nE_in);
     
-                            
+                  
     // Resample scatter-angle PDF onto linear energy grid if required
     if (energyGrid.type == EgridType::Linear) {
-        Egrid logGrid(p.nE, 6.0, 1.0, EgridType::Logarithmic);
+        Egrid EGrid_in(p.nE, 6.0, 1.0, EgridType::Logarithmic);
         std::vector<float> scat_interp(scatter_angle_pdf.size(), 0.0f);
         for (int t = 0; t < p.nTheta; ++t) {
             for (int e = 0; e < p.nE; ++e) {
                 double E_lin = energyGrid.eToEcg(e);
-                int idx = logGrid.EToIndex(E_lin);
+                int idx = EGrid_in.EToIndex(E_lin);
                 int idx2 = std::min(idx + 1, p.nE - 1);
-                double Ea = logGrid.eToE(idx);
-                double Eb = logGrid.eToE(idx2);
+                double Ea = EGrid_in.eToE(idx);
+                double Eb = EGrid_in.eToE(idx2);
                 double w = 0.0;
                 if (Eb > Ea) w = (E_lin - Ea) / (Eb - Ea);
-                double sa = scatter_angle_pdf[t * p.nE + idx];
-                double sb = scatter_angle_pdf[t * p.nE + idx2];
+                double sa = scatter_angle_pdf_in[t * p.nE_in + idx];
+                double sb = scatter_angle_pdf_in[t * p.nE_in + idx2];
                 double val = (1.0 - w) * sa + w * sb;
                 scat_interp[t * p.nE + e] = static_cast<float>(val);
             }
         }
         scatter_angle_pdf.swap(scat_interp);
+    } else {
+        // Non-linear energy grid: interpolate sigmasE from input grid to runtime grid
+        if (p.nE != p.nE_in) {
+            Egrid EGrid_in(p.nE_in, p.decades_in, p.E0_in, p.egridType_in);
+            std::vector<float> scat_interp(scatter_angle_pdf.size(), 0.0f);
+            for (int t = 0; t < p.nTheta; ++t) {
+                for (int e = 0; e < p.nE; ++e) {
+                    double E = energyGrid.eToEcg(e);
+                    int idx = EGrid_in.EToIndex(E);
+                    int idx2 = std::min(idx + 1, p.nE_in - 1);
+                    double Ea = EGrid_in.eToE(idx);
+                    double Eb = EGrid_in.eToE(idx2);
+                    double w = 0.0;
+                    if (Eb > Ea) w = (E - Ea) / (Eb - Ea);
+                    double sa = scatter_angle_pdf_in[t * p.nE_in + idx];
+                    double sb = scatter_angle_pdf_in[t * p.nE_in + idx2];
+                    double val = (1.0 - w) * sa + w * sb;
+                    scat_interp[t * p.nE + e] = static_cast<float>(val);
+                }
+            }
+            scatter_angle_pdf.swap(scat_interp);
+        } else {
+            // Runtime energy grid is the same as input energy grid: just copy the data
+            scatter_angle_pdf = scatter_angle_pdf_in;
+        }
     }
+
+
 
     theta_sampled = vector<int>(p.nTheta * p.nE, 0.0f);
     buildAliasTable();
-    // sampleTheta();
-    // writeThetaToFile();
-    // exit(0); // TEMP
 
 
     deltaEs = vector<float>(p.nCollisions, 0.0f); //eV
@@ -242,6 +303,8 @@ Precip::Precip(Params params, std::shared_ptr<Source> src_, const World1D &world
 
     // Initialise redistribution matrix for secondary electron energy cascade
     computeSigaEcascade(deltaEs);   
+
+ 
 
 } // End of Precip constructor
 
@@ -327,7 +390,6 @@ void Precip::buildAliasTable() {
 }
 
 
-
 void runPrimariesKernel(DeviceArrays darrs, DeviceArrays harrs, SimParams p);
 
 void Precip::processPrimaries(){
@@ -352,9 +414,6 @@ void Precip::processPrimaries(){
     harrs.nion = &nion[0];
     harrs.theta_sampled = &theta_sampled[0];
     harrs.colcount = &colcount[0];
-    harrs.nexB = &nexB[0];
-    harrs.nexC = &nexC[0];
-    harrs.nexEF = &nexEF[0]; // number of excitations to singlet EF
 
 
 #ifdef USE_CUDA
@@ -428,22 +487,9 @@ void Precip::processPrimaries(){
     cudaMalloc((void**)&darrs.theta_sampled, size_theta);
     cudaMemcpy(darrs.theta_sampled, theta_sampled.data(), size_theta, cudaMemcpyHostToDevice);
 
-    size_t size_colcount   = colcount.size() * sizeof(float);
+    size_t size_colcount   = colcount.size() * sizeof(int);
     cudaMalloc((void**)&darrs.colcount, size_colcount);
     cudaMemcpy(darrs.colcount, colcount.data(), size_colcount, cudaMemcpyHostToDevice);
-
-    size_t size_nexB       = nexB.size() * sizeof(int);
-    cudaMalloc((void**)&darrs.nexB, size_nexB);
-    cudaMemcpy(darrs.nexB, nexB.data(), size_nexB, cudaMemcpyHostToDevice);
-
-    size_t size_nexC       = nexC.size() * sizeof(int);
-    cudaMalloc((void**)&darrs.nexC, size_nexC);
-    cudaMemcpy(darrs.nexC, nexC.data(), size_nexC, cudaMemcpyHostToDevice);
-
-    size_t size_nexEF      = nexEF.size() * sizeof(int);
-    cudaMalloc((void**)&darrs.nexEF, size_nexEF);
-    cudaMemcpy(darrs.nexEF, nexEF.data(), size_nexEF, cudaMemcpyHostToDevice);
-
 
     // Launch the CUDA kernel
     runPrimariesKernel(darrs, harrs, p);
@@ -454,13 +500,13 @@ void Precip::processPrimaries(){
 void Precip::nionToQion() {
     // Convert nion in number bin-1 cm-2 to qion in cm-3 eV-1
     // A cm-2 column from the MC run is assumed
-    // nion  = nion(z, E->)
-    // Transpose nion because in the solver below we pass over z for each energy bin
+    // nion  = nion(E->, z)
+    // Transpose nion to [e][z] because in the solver below we pass over z for each energy bin
     for (int e = 0; e < p.nbinsE; e++) {
         double dE = p.dE(e);
         for (int z = 0; z < p.nbinsZ; z++) {
             int thisnion = nion[z * p.nbinsE + e];
-            qion[e][z] = thisnion / static_cast<float>(sp.N) / p.dzcm / dE; // ptle-1 cm-1 s-1 eV-1
+            qion1[e][z] = thisnion / static_cast<float>(sp.N) / p.dzcm / dE; // ptle-1 cm-1 s-1 eV-1
         }
     }
 
@@ -472,7 +518,7 @@ void Precip::nionToQion() {
         }
         if (sum > max_qz) max_qz = sum;
     }
-    std::cout << "Maximum value of qz*1e2 from primaries: " << max_qz*1e2 << std::endl;
+    // std::cout << "Maximum value of qz*1e2 from primaries: " << max_qz*1e2 << std::endl;
 }
 
 
@@ -503,7 +549,7 @@ void Precip::sampleTheta(){
 
         // Sample theta using the Walker alias method
         // Generate random integers index j in the range [0, nTheta)
-        int nRands = 10000;
+        int nRands = 1000000;
         for (int i = 0; i < nRands; i++) {
             int j = static_cast<int>(rnd() * p.nTheta);
             // Generate a random number in [0,1]
@@ -535,7 +581,7 @@ void Precip::writeThetaToFile() {
         }
         if (total_counts > 0) {
             for (int t = 0; t < p.nTheta; ++t) {
-                theta_sampled[t * p.nE + e] /= (static_cast<float>(total_counts)/10000.);
+                theta_sampled[t * p.nE + e] /= (static_cast<float>(total_counts)/1000000.);
             }
         }
     }
@@ -1068,184 +1114,255 @@ void Precip::processSecondaries() {
 
     cout << "Processing secondaries..." << endl;
 
+
+    const double psi_rad = world.Bdipang * M_PI / 180.0;
+    const double sinpsi = std::sin(psi_rad);
+
+    if (sinpsi <= 0.0) {
+        throw std::runtime_error(
+            "processSecondaries: sin(psi) must be > 0. "
+            "psi = 90 deg corresponds to vertical transport."
+        );
+    }
+
     double total_qion_E = 0.0;  
-    vector<double> qion_E(p.nbinsE, 0.0); // qion integrated over z for each energy bin
+    vector<double> qion_E(p.nbinsE, 0.0); // qion integrated over vertical z for each energy bin
+
     for (int e = 0; e < p.nbinsE; ++e) {
         double dE = p.dE(e);
         double Ec = p.Ecg(e);
         double E = p.El(e);
+
         for (int z = 0; z < p.nbinsZ; ++z) {
-            total_qion_E += qion[e][z] * dE * p.dzcm * Ec;
-            qion_E[e] += qion[e][z] * p.dzcm;
+            total_qion_E += qion1[e][z] * dE * p.dzcm * Ec;
+            qion_E[e]    += qion1[e][z] * p.dzcm;
         }
     }
 
+    cout << "Total integrated qion energy over energy and height per input particle: "
+         << total_qion_E << " eV" << std::endl;
 
-    cout << "Total integrated qion energy over energy and height per input particle: " << total_qion_E << " eV" << std::endl;
 
-
-
-    // convert sigmasE to a 2D array for convenience
+    // Convert sigmasE to a 2D array for convenience
     vector<vector<double>> sigsE(p.nbinsE, vector<double>(p.nCollisions, 0.0));
+
     for (int e = 0; e < p.nbinsE; ++e) {
         for (int c = 0; c < p.nCollisions; ++c) {
             sigsE[e][c] = static_cast<double>(sigmasE[e * p.nCollisions + c]);
         }
     }
 
-    //Define a factor by which to resize the z axis to smooth the ionisation rate qion
-    float zfact = 5.0f; // 10 times the bin size
-    int zfactint = static_cast<int>(zfact);
-    float dzcm = p.dzcm / zfact; // new bin size in m
-    int nz = static_cast<int>(p.nbinsZ * zfact); // new number of bins
 
-    // Interpolate world.nH2 onto the new z axis
-    vector<float> nH2 = interpolateArray(world.nH2, p.nbinsZ, p.dzcm, nz, dzcm);
+    // -------------------------------------------------------------------------
+    // Refined vertical grid
+    // -------------------------------------------------------------------------
+
+    float zfact = 5.0f;
+    int zfactint = static_cast<int>(zfact);
+
+    // Fine vertical grid spacing
+    float dzcm_z = p.dzcm / zfact;
+
+    // Fine path-length spacing along tilted field/beam
+    float dzcm_s = dzcm_z / static_cast<float>(sinpsi);
+
+    int nz = static_cast<int>(p.nbinsZ * zfact);
+
+
+    // Interpolate world.nH2 onto the refined vertical z grid
+    vector<float> nH2 = interpolateArray(world.nH2, p.nbinsZ, p.dzcm, nz, dzcm_z);
 
 
     // Compute the backscatter probability for Rutherford scattering as a function of energy
     vector<double> rutherfordBSP = backscatterProbabilityRutherford();
 
-    // Compute L(E,z) n(σₐ_total + pₑσₑ) and S(E,z) = n(pₑσₑ)
-    vector<vector<double>> L, S; 
-    L.resize(p.nbinsE, vector<double>(nz, 0)); // set to 0
-    S.resize(p.nbinsE, vector<double>(nz, 0)); // set to 0
-    // Loop over energies
-    for (size_t e=0; e < p.nbinsE; ++e) {
 
-        // L/n and S/n are constant in z
-        // Elastic scattering cross section
+    // Compute L(E,z) = n(σ_i,total + p_e σ_e)
+    // and     S(E,z) = n(p_e σ_e)
+
+    vector<vector<double>> L, S; 
+    L.resize(p.nbinsE, vector<double>(nz, 0.0));
+    S.resize(p.nbinsE, vector<double>(nz, 0.0));
+
+    for (size_t e = 0; e < p.nbinsE; ++e) {
+
         float sigma_e = sigsE[e][p.elastic]; // cm2
 
         double L_n = sigmaiEffTot[e] + rutherfordBSP[e] * sigma_e; // cm2
-        double S_n = rutherfordBSP[e] * sigma_e; // cm2
+        double S_n = rutherfordBSP[e] * sigma_e;                   // cm2
 
-
-        // Loop over the spatial grid (along z upward) to compute L and S for this E.
         for (size_t z = 0; z < nz; ++z) {
             L[e][z] = L_n * nH2[z]; 
             S[e][z] = S_n * nH2[z];
         }
     }
 
-    double mu = p.cosThetaMean; // mu = ⟨cosθ⟩
+
+    double mu = p.cosThetaMean; // mu = <cos(theta)>
+
 
     vector<vector<double>> qp;
     vector<vector<double>> qm;
-    qp.resize(p.nbinsE, vector<double>(nz, 0)); // set to 0 here; gets updated in the cascade
-    qm.resize(p.nbinsE, vector<double>(nz, 0));
 
-    //Output arrays
-    // Phi[e][z] because the innermost loop is over z
-    phiPlus.resize(p.nbinsE, vector<double>(nz, 0)); // set to 0
-    phiMinus.resize(p.nbinsE, vector<double>(nz, 0));
-    secqion.resize(p.nbinsE, vector<double>(nz, 0)); // secondary ionisation rate (E,z)
-    secexB.resize(nz, vector<double>(p.nbinsE, 0)); // secondary excitation rate for singlet B (z,E) to match primaries array order
-    secexC.resize(nz, vector<double>(p.nbinsE, 0)); // secondary excitation rate for singlet C (z,E)
-    secexEF.resize(nz, vector<double>(p.nbinsE, 0)); // secondary excitation rate for singlet EF (z,E)
-    double ediss = 0.0; // energy dissipation rate (z)
-    double eoutTop = 0.0; // energy out the top (integrated over E)
-    // cout << "arr=[";
+    qp.resize(p.nbinsE, vector<double>(nz, 0.0));
+    qm.resize(p.nbinsE, vector<double>(nz, 0.0));
 
+
+    // Output arrays
+    phiPlus.resize(p.nbinsE, vector<double>(nz, 0.0));
+    phiMinus.resize(p.nbinsE, vector<double>(nz, 0.0));
+
+    qion2.resize(p.nbinsE, vector<double>(nz, 0.0));
+
+    // Secondary excitation arrays use [c][z][E] to match primaries array order
+    exRates2.resize(p.nCollisions, vector<vector<double>>(nz, vector<double>(p.nbinsE, 0.0)));
+
+    double ediss = 0.0;   // energy dissipation/sink integrated over path
+    double eoutTop = 0.0; // energy out the top, integrated over E
 
     //########################################################################################
 
-    // Now enter the main loop to solve the parabolic equation, cascade and 
-    // compute secondary production etc. for each energy bin
+    // Main loop: solve the parabolic equation, cascade, and compute secondary
+    // production for each energy bin.
+    //
     // Start from the highest energy bin and work downwards.
-    // Use a safe unsigned-downwards loop idiom to avoid underflow when e reaches 0.
+    // Safe unsigned-downwards loop avoids underflow when e reaches 0.
     double total_qion_E_refined = 0.0;
-    for (size_t e = p.nbinsE; e-- > 0; ) { // e= 0 sink at the bottom of the grid
- 
+
+    for (size_t e = p.nbinsE; e-- > 0; ) {
 
         vector<double> q(nz, 0.0);
-        vector<double> dLdz(nz, 0.0);
-        vector<double> dSdz(nz, 0.0);
-        vector<double> dqmdz(nz, 0.0);
-        vector<double> dqdz(nz, 0.0);
+
+        // These are derivatives with respect to the path coordinate s, not z.
+        vector<double> dLds(nz, 0.0);
+        vector<double> dSds(nz, 0.0);
+        vector<double> dqmds(nz, 0.0);
+        vector<double> dqds(nz, 0.0);
 
         double dE = p.dE(e); // eV
-        double sig_B = sigsE[e][p.excitation_singlet_B];
-        double sig_C = sigsE[e][p.excitation_singlet_C];
+
+        double sig_B  = sigsE[e][p.excitation_singlet_B];
+        double sig_C  = sigsE[e][p.excitation_singlet_C];
         double sig_EF = sigsE[e][p.excitation_singlet_EF];
 
 
-        // Interpolate q(E) onto full new z grid
+        // Interpolate q(E) onto refined vertical z grid.
         vector<double> qe(p.nbinsZ, 0.0);
+
         for (size_t z = 0; z < p.nbinsZ; ++z) {
-            qe[z] = qion[e][z];
+            qe[z] = qion1[e][z];
         }
-        q = interpolateArray(qe, p.nbinsZ, p.dzcm, nz, dzcm);
+
+        q = interpolateArray(qe, p.nbinsZ, p.dzcm, nz, dzcm_z);
+
+        
 
 
-        // Now compute the d/dz gradients for L, S, q, and q⁻
-        compute_derivative(L[e], dLdz, dzcm);
-        compute_derivative(S[e], dSdz, dzcm);
-        compute_derivative(q, dqdz, dzcm);
-        compute_derivative(qm[e], dqmdz, dzcm);
+        // Compute gradients with respect to the tilted path coordinate s.
+        //
+        // Since neighbouring altitude samples are separated by dz, but the
+        // transport coordinate separation is ds = dz/sin(psi), using dzcm_s
+        // here gives d/ds = sin(psi) d/dz.
+        compute_derivative(L[e],  dLds,  dzcm_s);
+        compute_derivative(S[e],  dSds,  dzcm_s);
+        compute_derivative(q,     dqds,  dzcm_s);
+        compute_derivative(qm[e], dqmds, dzcm_s);
+
 
         // Coefficients for the tridiagonal system
         vector<double> a(nz, 0.0);
         vector<double> b(nz, 0.0);
         vector<double> c(nz, 0.0);
         vector<double> d(nz, 0.0);
+
         double g0 = 0.0;
         double b0 = 0.0;
+
         for (size_t z = 0; z < nz; ++z) {
-            double alpha = -1.0/S[e][z] * dSdz[z];     
-            double beta =  -1.0/mu * (dLdz[z] + L[e][z] * L[e][z] / mu - S[e][z] * S[e][z] / mu - 
-                            L[e][z]/S[e][z]*dSdz[z]);
-            double gamma = 1.0/mu * (S[e][z] * qp[e][z] / mu + L[e][z] * qm[e][z] / mu +
-                            q[z] / (2.0 * mu) * (L[e][z] + S[e][z]) + alpha * (q[z] / 2 + qm[e][z]) +
-                            dqdz[z] / 2.0 + dqmdz[z]);
-            if (z == 0){
+
+            double alpha = -1.0 / S[e][z] * dSds[z];
+
+            double beta =
+                -1.0 / mu *
+                (
+                    dLds[z]
+                    + L[e][z] * L[e][z] / mu
+                    - S[e][z] * S[e][z] / mu
+                    - L[e][z] / S[e][z] * dSds[z]
+                );
+
+            double gamma =
+                1.0 / mu *
+                (
+                    S[e][z] * qp[e][z] / mu
+                    + L[e][z] * qm[e][z] / mu
+                    + q[z] / (2.0 * mu) * (L[e][z] + S[e][z])
+                    + alpha * (q[z] / 2.0 + qm[e][z])
+                    + dqds[z] / 2.0
+                    + dqmds[z]
+                );
+
+            if (z == 0) {
                 g0 = gamma;
                 b0 = beta;
             }
 
-
-            a[z] = 1 + alpha * dzcm / 2.0;
-            b[z] = beta * dzcm * dzcm - 2.0;
-            c[z] = 1 - alpha * dzcm / 2.0;
-            d[z] = -gamma * dzcm * dzcm;
+            a[z] = 1.0 + alpha * dzcm_s / 2.0;
+            b[z] = beta * dzcm_s * dzcm_s - 2.0;
+            c[z] = 1.0 - alpha * dzcm_s / 2.0;
+            d[z] = -gamma * dzcm_s * dzcm_s;
         }
-        
 
-        // Solve the tridiagonal system for Phiminus using the Thomas algorithm
+
+        // Solve the tridiagonal system for phiMinus using the Thomas algorithm
         vector<double> phim(nz, 0.0);
-        phim[0] = -g0/b0; // Boundary condition at z = 0, derivs = 0
-        thomasAlgorithm(a, b, c, d, phim);
-        
 
-        // Now integrate Phiplus
+        phim[0] = -g0 / b0; // Boundary condition at z = 0, derivatives = 0
+
+        thomasAlgorithm(a, b, c, d, phim);
+
+
+        // Integrate phiPlus along the tilted path coordinate s
         vector<double> phip(nz, 0.0);
-        phip[0] = phim[0];    // Boundary condition at the bottom
+
+        phip[0] = phim[0]; // Bottom boundary condition
+
         for (size_t z = 0; z < nz - 1; ++z) {
-            double a = L[e][z] / mu;
-            double b = S[e][z] * phim[z] / mu + q[z] / (2.0 * mu) + qp[e][z] / mu;
-            double x = a * dzcm; 
-            if (x > 50) x = 50.; // Limit tau to avoid overflow
-            phip[z+1] = (phip[z] - b/a) * exp(-x) + b/a;
+
+            double A = L[e][z] / mu;
+            double B = S[e][z] * phim[z] / mu
+                     + q[z] / (2.0 * mu)
+                     + qp[e][z] / mu;
+
+            double x = A * dzcm_s;
+
+            if (x > 50.0) x = 50.0; // Limit optical depth to avoid overflow
+
+            phip[z + 1] = (phip[z] - B / A) * exp(-x) + B / A;
         }
 
 
-
-        // Now compute the energy cascade for this energy bin
-        // This first part is electrons falling into lower bins due to inelastic collisions
-        // For each inelastic collision, for each target energy bin below this one (et), 
-        // compute the resulting production rate at all altitudes
+        // ---------------------------------------------------------------------
+        // Energy cascade for this energy bin
+        // ---------------------------------------------------------------------
 
         double edissE = 0.0;
-        double totqm = 0.0; // Total energy in electrons at this energy bin
+        double totqm = 0.0;
         double totqp = 0.0;
-        for (size_t c = 1; c < p.collisionCount; ++c) { // Exclude elastic collisions.
+
+        // Electrons falling into lower bins due to inelastic collisions.
+        // For each inelastic collision, for each target energy bin below this one,
+        // compute the resulting production rate at all altitudes.
+        for (size_t coll = 1; coll < p.collisionCount; ++coll) { // Exclude elastic collisions
+
             double p_i; // Backscatter probability
-            if (c == p.ionisation ||
-                c == p.excitation_singlet_B || 
-                c == p.excitation_singlet_C ||
-                c == p.excitation_singlet_EF) {
-                    p_i = rutherfordBSP[e];
-                }
+
+            if (coll == p.ionisation ||
+                coll == p.excitation_singlet_B || 
+                coll == p.excitation_singlet_C ||
+                coll == p.excitation_singlet_EF) {
+                p_i = rutherfordBSP[e];
+            }
             else {
                 p_i = 0.5; // isotropic scattering
             }
@@ -1253,170 +1370,231 @@ void Precip::processSecondaries() {
             for (size_t z = 0; z < nz; ++z) {
                 for (size_t et = 0; et < e; ++et) {
 
-                    const double sig = sigi[c][e][et];
-                    if (sig == 0.0) continue;
-                    qp[et][z] += nH2[z] * (p_i * sig * phim[z] + (1.0 - p_i) * sig * phip[z]);
-                    qm[et][z] += nH2[z] * (p_i * sig * phip[z] + (1.0 - p_i) * sig * phim[z]);
+                    const double sig = sigi[coll][e][et];
 
+                    if (sig == 0.0) continue;
+
+                    qp[et][z] += nH2[z] *
+                                 (
+                                     p_i * sig * phim[z]
+                                     + (1.0 - p_i) * sig * phip[z]
+                                 );
+
+                    qm[et][z] += nH2[z] *
+                                 (
+                                     p_i * sig * phip[z]
+                                     + (1.0 - p_i) * sig * phim[z]
+                                 );
                 }
             }
-
         }
 
-        for (int c = 0; c < p.collisionCount; ++c) {
-            if (c == p.elastic) continue;
+
+        // Path-integrated energy dissipation.
+        for (int coll = 0; coll < p.collisionCount; ++coll) {
+
+            if (coll == p.elastic) continue;
+
             for (size_t z = 0; z < nz; ++z) {
-                double delE = deltaEs[c];
-                edissE += nH2[z] * (phim[z] + phip[z]) * dE * dzcm
-                        * sigsE[e][c] * delE;
-                ediss  += nH2[z] * (phim[z] + phip[z]) * dE * dzcm
-                        * sigsE[e][c] * delE;
+
+                double delE = deltaEs[coll];
+
+                edissE += nH2[z] * (phim[z] + phip[z]) * dE * dzcm_s
+                        * sigsE[e][coll] * delE;
+
+                ediss  += nH2[z] * (phim[z] + phip[z]) * dE * dzcm_s
+                        * sigsE[e][coll] * delE;
             }
         }
 
 
-        // Now compute the secondary ionisation production rate for this energy bin
-        // Now compute target bin secondary production rates for this energy bin and add them to the production rate
-        double totqsec = 0.0; // Total energy in secondary electrons at this energy bin
+        // ---------------------------------------------------------------------
+        // Secondary ionisation production
+        // ---------------------------------------------------------------------
+
+        double totqsec = 0.0;
+
         for (size_t et = 0; et < e; ++et) {
+
             const double sec = secprodsig[e][et];
+
             if (sec == 0.0) continue;
 
             for (size_t z = 0; z < nz; ++z) {
-                const double phi_sum = phim[z] + phip[z];
-                const double sq = nH2[z] * phi_sum * sec;         
 
-                secqion[et][z] += sq;
+                const double phi_sum = phim[z] + phip[z];
+                const double sq = nH2[z] * phi_sum * sec;
+
+                qion2[et][z] += sq;
 
                 qm[et][z] += 0.5 * sq;
                 qp[et][z] += 0.5 * sq;
             }
         }
 
-        // Store the computed values in phiPlus and PhiMinus
-        for (size_t z = 0; z < nz - 1; ++z) {
-            phiPlus[e][z] = phip[z];
+
+        // Store phiPlus and phiMinus
+        for (size_t z = 0; z < nz; ++z) {
+            phiPlus[e][z]  = phip[z];
             phiMinus[e][z] = phim[z];
         }
 
-        for (size_t z = 0; z < nz; ++z) {
-            secexB[z][e] = nH2[z] * sigsE[e][p.excitation_singlet_B] * (phim[z] + phip[z]) * dE; // cm-3 s-1
-            secexC[z][e] = nH2[z] * sigsE[e][p.excitation_singlet_C] * (phim[z] + phip[z]) * dE;
-            secexEF[z][e] = nH2[z] * sigsE[e][p.excitation_singlet_EF] * (phim[z] + phip[z]) * dE;
-        }
 
-        for (int c = 0; c < p.collisionCount; ++c) {
-            if (c == p.elastic) continue;
+        // Secondary excitation rates.
+        for (size_t coll = 0; coll < p.collisionCount; ++coll) {
+
+            if (coll == p.elastic) continue;
+
             for (size_t z = 0; z < nz; ++z) {
-                ediss += nH2[z] * (phim[z] + phip[z]) * dE * dzcm * sigSink[c][e] * p.Ec(e);
+                exRates2[coll][z][e] = nH2[z] * (phim[z] + phip[z]) * dE * sigsE[e][coll];
             }
         }
 
 
+        // Additional sink term, path-integrated along path
+        for (int coll = 0; coll < p.collisionCount; ++coll) {
+
+            if (coll == p.elastic) continue;
+
+            for (size_t z = 0; z < nz; ++z) {
+
+                ediss += nH2[z] * (phim[z] + phip[z]) * dE * dzcm_s
+                       * sigSink[coll][e] * p.Ec(e);
+            }
+        }
+
+
+        // Energy escaping through the top.
         eoutTop += phip[nz - 1] * mu * p.Ec(e) * dE;
 
-    } // end of energy bin loop #####################################################
-
+    } // end energy loop ###########################################################
 
 
     double E_low = 0.0;
-    for (size_t z=0; z<nz; ++z) {
-        E_low += (phiMinus[0][z] + phiPlus[0][z]) * p.dE(0) * p.Ec(0) * dzcm;
-    }     
-    std::cout << "Total energy accounted for (dissipation + energy sink + outflow): " <<  (ediss + eoutTop) << " eV" << std::endl;
 
+    for (size_t z = 0; z < nz; ++z) {
+        E_low += (phiMinus[0][z] + phiPlus[0][z])
+               * p.dE(0) * p.Ec(0) * dzcm_s;
+    }
 
-    // Rebin secqion, phiPlus, phiMinus back onto the original z axis
-    // The fine grid has nz bins (dzcm), the original grid has p.nbinsZ bins (p.dzcm)
-    // For each original z bin, sum or average the fine grid bins that fall within it
+    // -------------------------------------------------------------------------
+    // Rebin qion2, phiPlus, phiMinus back onto the original vertical z axis.
+    // -------------------------------------------------------------------------
 
-    // Helper lambda to map fine z index to coarse/original z index
     auto fine_to_coarse_z = [&](int fine_z) -> int {
-        float z_fine = fine_z * dzcm;
+        float z_fine = fine_z * dzcm_z;
         int coarse_z = static_cast<int>(z_fine / p.dzcm);
         return std::min(coarse_z, p.nbinsZ - 1);
     };
 
-    float dz_fine = dzcm; // fine grid spacing in cm
-    float dz_coarse = p.dzcm; // coarse grid spacing in cm
+    float dz_fine   = dzcm_z;
+    float dz_coarse = p.dzcm;
 
-  
-    // Rebin secqion
 
-    // zero accumulator
-    vector<vector<double>> acc(p.nbinsE, 
-        vector<double>(p.nbinsZ, 0.0));
+    // -------------------------------------------------------------------------
+    // Rebin qion2
+    // -------------------------------------------------------------------------
 
-    // accumulate fine→coarse integral into acc
+    vector<vector<double>> acc(p.nbinsE, vector<double>(p.nbinsZ, 0.0));
+
+    // Accumulate fine -> coarse vertical integral
     for (int e = 0; e < p.nbinsE; ++e) {
         for (int zf = 0; zf < nz; ++zf) {
-            int zc = fine_to_coarse_z(zf);     // which coarse bin
-            acc[e][zc] += secqion[e][zf] * dz_fine;
+            int zc = fine_to_coarse_z(zf);
+            acc[e][zc] += qion2[e][zf] * dz_fine;
         }
     }
 
-    // divide by coarse cell width to get back to rate per cm
+    // Resize qion2 to the original vertical grid and divide by coarse cell width
+    qion2.assign(p.nbinsE, vector<double>(p.nbinsZ, 0.0));
+
     for (int e = 0; e < p.nbinsE; ++e) {
         for (int zc = 0; zc < p.nbinsZ; ++zc) {
-            secqion[e][zc] = acc[e][zc] / dz_coarse;
+            qion2[e][zc] = acc[e][zc] / dz_coarse;
         }
     }
 
-    // Rebin phiPlus and phiMinus ([p.nbinsE][nz])
+
+    // -------------------------------------------------------------------------
+    // Rebin phiPlus and phiMinus from [E][fine z] to [E][coarse z]
+    // -------------------------------------------------------------------------
+
     auto rebin_phi = [&](vector<vector<double>>& phi) {
+
         vector<vector<double>> rebinned(p.nbinsE, vector<double>(p.nbinsZ, 0.0));
         vector<vector<int>> counts(p.nbinsE, vector<int>(p.nbinsZ, 0));
+
         for (int e = 0; e < p.nbinsE; ++e) {
             for (int zf = 0; zf < nz; ++zf) {
+
                 int zc = fine_to_coarse_z(zf);
+
                 rebinned[e][zc] += phi[e][zf];
                 counts[e][zc]++;
             }
         }
-        for (int e = 0; e < p.nbinsE; ++e)
-            for (int zc = 0; zc < p.nbinsZ; ++zc)
-                if (counts[e][zc] > 0)
-                    phi[e][zc] = rebinned[e][zc] / static_cast<float>(counts[e][zc]);
-                else
+
+        phi.assign(p.nbinsE, vector<double>(p.nbinsZ, 0.0));
+
+        for (int e = 0; e < p.nbinsE; ++e) {
+            for (int zc = 0; zc < p.nbinsZ; ++zc) {
+
+                if (counts[e][zc] > 0) {
+                    phi[e][zc] = rebinned[e][zc]
+                               / static_cast<double>(counts[e][zc]);
+                }
+                else {
                     phi[e][zc] = 0.0;
-        // Resize to original z bins
-        for (int e = 0; e < p.nbinsE; ++e)
-            phi[e].resize(p.nbinsZ);
+                }
+            }
+        }
     };
-    
+
     rebin_phi(phiPlus);
     rebin_phi(phiMinus);
 
 
-    // Rebin secexB, secexC, secexEF from fine grid (nz) to coarse/original grid (p.nbinsZ)
-    auto rebin_secex = [&](vector<vector<double>>& secex) {
-        vector<vector<double>> acc(p.nbinsZ, vector<double>(p.nbinsE, 0.0));
-        vector<vector<int>> counts(p.nbinsZ, vector<int>(p.nbinsE, 0));
-        for (int zf = 0; zf < nz; ++zf) {
-            int zc = fine_to_coarse_z(zf);
-            for (int e = 0; e < p.nbinsE; ++e) {
-                acc[zc][e] += secex[zf][e];
-                counts[zc][e]++;
+
+    // -------------------------------------------------------------------------
+    // Rebin exRates2 from [collision][fine z][E] to [collision][coarse z][E]
+    // -------------------------------------------------------------------------
+
+    auto rebin_exRates = [&](vector<vector<vector<double>>>& exRates) {
+
+        vector<vector<vector<double>>> rebinned(p.nCollisions, vector<vector<double>>(p.nbinsZ, vector<double>(p.nbinsE, 0.0)));
+        vector<vector<int>> counts(p.nCollisions, vector<int>(p.nbinsZ, 0));
+
+        for (int coll = 0; coll < p.nCollisions; ++coll) {
+            for (int zf = 0; zf < nz; ++zf) {
+                int zc = fine_to_coarse_z(zf);
+                for (int e = 0; e < p.nbinsE; ++e) {
+                    rebinned[coll][zc][e] += exRates[coll][zf][e];
+                }
+                counts[coll][zc]++;
             }
         }
-        for (int zc = 0; zc < p.nbinsZ; ++zc) {
-            for (int e = 0; e < p.nbinsE; ++e) {
-                if (counts[zc][e] > 0)
-                    secex[zc][e] = acc[zc][e] / static_cast<double>(counts[zc][e]);
-                else
-                    secex[zc][e] = 0.0;
+
+        exRates.assign(p.nCollisions, vector<vector<double>>(p.nbinsZ, vector<double>(p.nbinsE, 0.0)));
+
+        for (int coll = 0; coll < p.nCollisions; ++coll) {
+            for (int zc = 0; zc < p.nbinsZ; ++zc) {
+                for (int e = 0; e < p.nbinsE; ++e) {
+                    if (counts[coll][zc] > 0) {
+                        exRates[coll][zc][e] = rebinned[coll][zc][e]
+                                            / static_cast<double>(counts[coll][zc]);
+                    }
+                    else {
+                        exRates[coll][zc][e] = 0.0;
+                    }
+                }
             }
         }
-        // Resize to original z bins
-        secex.resize(p.nbinsZ);
     };
 
-    rebin_secex(secexB);
-    rebin_secex(secexC);
-    rebin_secex(secexEF);
+    rebin_exRates(exRates2);
+
 
 } // End of processSecondaries
-
 
 // Thomas algorithm for solving tridiagonal system
 void Precip::thomasAlgorithm(const vector<double>& a, 
@@ -1450,19 +1628,31 @@ void Precip::thomasAlgorithm(const vector<double>& a,
 
 
 void Precip::combinePrimarySecondary() {
+
     // Combine the primary and secondary ionisation rates
     for (int e = 0; e < p.nbinsE; e++) {
         for (int z = 0; z < p.nbinsZ; z++) {
-            qion[e][z] = qion[e][z] + secqion[e][z]; // cm-3 s-1 eV-1
+            qion[e][z] = qion1[e][z] + qion2[e][z]; // cm-3 s-1 eV-1
         }
     }
 
     //Combine primary and secondary excitation rates
+    for (int coll = 0; coll < p.nCollisions; ++coll) {
+        for (int z = 0; z < p.nbinsZ; ++z) {
+            for (int e = 0; e < p.nbinsE; ++e) {
+                int thisnex = colcount[coll * p.nbinsZ * p.nbinsE + z * p.nbinsE + e];
+                float exRate1 = static_cast<float>(thisnex) / static_cast<float>(sp.N) / p.dzcm; // cm-3 s-1
+                exRates[coll][z][e] = exRate1 + exRates2[coll][z][e]; // cm-3 s-1
+            }
+        }
+    }
+
+    // Copy exRates into exRateB, exRateC, exRateEF for convenience
     for (int z = 0; z < p.nbinsZ; ++z) {
         for (int e = 0; e < p.nbinsE; ++e) {
-            exRateB[z][e] = nexB[z * p.nbinsE + e] / static_cast<double>(sp.N) / p.dzcm + secexB[z][e]; // cm-3 s-1
-            exRateC[z][e] = nexC[z * p.nbinsE + e] / static_cast<double>(sp.N) / p.dzcm + secexC[z][e];
-            exRateEF[z][e] = nexEF[z * p.nbinsE + e] / static_cast<double>(sp.N) / p.dzcm + secexEF[z][e];
+            exRateB[z][e]  = exRates[p.excitation_singlet_B][z][e];
+            exRateC[z][e]  = exRates[p.excitation_singlet_C][z][e];
+            exRateEF[z][e] = exRates[p.excitation_singlet_EF][z][e];
         }
     }
 
@@ -1473,6 +1663,7 @@ void Precip::sumQionOverE(){
     for (int z = 0; z < p.nbinsZ; ++z) {
         for (int e = 0; e < p.nbinsE; ++e) {
             qz[z] += qion[e][z] * p.dE(e); // cm-1
+            qz1[z] += qion1[e][z] * p.dE(e); // cm-1
         }
     }
 }
@@ -1486,7 +1677,7 @@ void Precip::writeSecQionToFile() {
     if (qionfile.is_open()) {   
         for (int e = 0; e < p.nbinsE; e++) {
             for (int z = 0; z < p.nbinsZ; z++) {
-                qionfile << setw(2) << secqion[e][z] << " ";
+                qionfile << setw(2) << qion2[e][z] << " ";
             }
             qionfile << endl;
         }
@@ -1494,7 +1685,7 @@ void Precip::writeSecQionToFile() {
     } else {
         cout << "Unable to open file for writing qion data" << endl;
     }
-    cout << "Wrote secqion to " << secqionfilename << "\n";
+    cout << "Wrote qion2 to " << secqionfilename << "\n";
 
 
 }
@@ -1556,7 +1747,7 @@ void Precip::writeQzToFile(bool primariesOnly) {
         {"nbinsZ", std::to_string(p.nbinsZ)}
     };
 
-    const std::vector<std::string> cols = {"z [km]", "qion [cm-1]"};
+    const std::vector<std::string> cols = {"z [km]", "qion [cm-1]", "qion1 [cm-1]"};
 
     const bool ok = utils::io::write_dat_table_fixed_width(
         filename,
@@ -1565,8 +1756,9 @@ void Precip::writeQzToFile(bool primariesOnly) {
         cols,
         p.nbinsZ,
         [&](int z, std::ostream& os, int w) {
-            os << std::right << std::setw(w) << static_cast<int>(zToZ(z)/1e3)
-            << " "        << std::setw(w) << qz[z];
+            os << std::right << std::setw(w) << zToZ(z)/1e3
+            << " "        << std::setw(w) << qz[z]
+            << " "        << std::setw(w) << qz1[z];
         },
         /*col_width=*/12,
         /*precision=*/6
@@ -1577,10 +1769,10 @@ void Precip::writeQzToFile(bool primariesOnly) {
 
 
 
-void Precip::writeExRatesToFile() {
+void Precip::writeFUVExRatesToFile() {
     std::stringstream ss;
     const std::string suf = src->label(sp);
-    ss << outdir << "exrates_" << suf << ".dat";
+    ss << outdir << "exratesFUV_" << suf << ".dat";
     const std::string filename = ss.str();
 
     std::vector<utils::io::MetaLine> meta = {
@@ -1609,9 +1801,54 @@ void Precip::writeExRatesToFile() {
         [&](std::ostream& os) {
             for (int z = 0; z < p.nbinsZ; ++z) {
                 for (int e = 0; e < p.nbinsE; ++e) {
-                    os << exRateB[z][e]  << " "
-                       << exRateC[z][e]  << " "
-                       << exRateEF[z][e] << " ";
+                    os << exRates[p.excitation_singlet_B][z][e]  << " "
+                       << exRates[p.excitation_singlet_C][z][e]  << " "
+                       << exRates[p.excitation_singlet_EF][z][e] << " ";
+                }
+                os << "\n";
+            }
+        }
+    );
+
+    if (ok) std::cout << "Wrote FUV excitation rates to " << filename << "\n";
+    else    std::cerr << "Failed to write FUV excitation rates to " << filename << "\n";
+}
+
+void Precip::writeExRatesToFile() {
+    std::stringstream ss;
+    const std::string suf = src->label(sp);
+    ss << outdir << "exrates_" << suf << ".dat";
+    const std::string filename = ss.str();
+
+    std::vector<utils::io::MetaLine> meta = {
+        {"run_ID", sp.runid},
+        {"quantity", "exRate[e][z]"},
+        {"excitations", "all collisions"},
+        {"layout",
+         "rows=z_index (0..nbinsZ-1). For each row, energies e=0..nbinsE-1 are written as lists: "
+         "[elastic, ionisation, a, b, c, e, B, C, vibrational, rotational, EF] concatenated across e."},
+        {"nbinsE", std::to_string(p.nbinsE)},
+        {"Egrid_type", energyGrid.typestring()},
+        {"Emin (eV)", std::to_string(p.E0)},
+        {"Emax (eV)", std::to_string(p.Emax)},
+        {"nbinsZ", std::to_string(p.nbinsZ)},
+        {"Zgrid_type", "linear"},
+        {"Zmin (m)", std::to_string(p.Z0)},
+        {"Zmax (m)", std::to_string(p.Z1)},
+        {"units", "cm-1"},
+    };
+
+    const bool ok = utils::io::write_dat_with_header(
+        filename,
+        "Precip model output: excitation rates (all collisions)",
+        meta,
+        /*column_names=*/{}, // too many columns to name sensibly
+        [&](std::ostream& os) {
+            for (int z = 0; z < p.nbinsZ; ++z) {
+                for (int e = 0; e < p.nbinsE; ++e) {
+                    for (int coll = 0; coll < p.nCollisions; ++coll) {
+                        os << exRates[coll][z][e] << " ";
+                    }
                 }
                 os << "\n";
             }
@@ -1666,19 +1903,18 @@ void Precip::writePhiToFile(std::vector<std::vector<double>>& phi, const std::st
 void Precip::run() {
 
     processPrimaries();
-
-    // writeThetaToFile();
     nionToQion();
-    writeQionToFile(false); // Write qion to a file, false means we write the full qion including secondaries
-
+    writeColcountToFile();
     processSecondaries();
     // writePhiToFile(phiPlus, "phiPlus.dat");
     // writePhiToFile(phiMinus, "phiMinus.dat");
 
     combinePrimarySecondary();
+    writeQionToFile(false); // Write qion to a file, false means we write the full qion including secondaries
     sumQionOverE();
     writeQzToFile();
-    writeExRatesToFile();
+    writeFUVExRatesToFile();
+    // writeExRatesToFile(); // Uncomment if you want to write all excitation rates to a file
 
 }
 
@@ -1691,7 +1927,8 @@ void Precip::runlite() {
     combinePrimarySecondary();
     sumQionOverE();
     writeQzToFile();
-    writeExRatesToFile();
+    writeFUVExRatesToFile();
+    // writeExRatesToFile(); // Uncomment if you want to write all excitation rates to a file
 
 }
 

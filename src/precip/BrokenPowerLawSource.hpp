@@ -36,8 +36,9 @@ protected:
 
     const float v0 = Etov(phi_); // Convert energy in eV to velocity in m/s
 
-    // Velocity range corresponding to 1–1000 keV
-    const float E_min = 1e3f, E_max = 1e6f;
+    // Velocity range from source parameters.
+    const float E_min = sp.Emin;
+    const float E_max = std::max(sp.Emax, E_min + 1.0f);
     const float v_min = Etov(E_min);
     const float v_max = Etov(E_max);
 

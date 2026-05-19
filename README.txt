@@ -14,8 +14,6 @@ This repository is archived on **Zenodo**:
 - **DOI (concept DOI):** TBD
 - **DOI (this version):** TBD
 
-- Development mirror: TBD
-
 ---
 
 ## Quick start
@@ -55,11 +53,12 @@ make -B CPU=1 DEBUG=1
 cuda-gdb jaic
 
 ### 4) Requirements
-CPU build
+CPU build:
 C++17 compiler (e.g. g++ or clang)
 make
 
-GPU build
+GPU build:
+The above plus
 NVIDIA GPU
 CUDA toolkit (nvcc) and compatible driver
 Note: If you are compiling on a cluster, load the appropriate compiler/CUDA modules first.
@@ -85,8 +84,10 @@ Outputs are written under:
 
 ${JAIC_ROOT}/out/<module>/<runid>/
 where:
-<module> refers to the JAIC module <precip>, <h2specc> etc.
+<module> refers to the JAIC module <precip>, <h2spec> etc.
 <runid> is defined by .runid in the source parameters
+
+The output columns and quantity units are given in the metadata at the top of each file
 
 
 ## Directory layout

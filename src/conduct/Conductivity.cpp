@@ -15,7 +15,7 @@
 #include <filesystem>
 #include "World1D.hpp"
 #include "Conductivity.hpp"
-
+#include "FileIO.hpp"
 
 
 #include "constants.h"
@@ -95,30 +95,57 @@ void Conductivity::computeConductivity() {
 
 
 void Conductivity::writeConductivityToFile() const {
-    stringstream ss;
-    if (!src) { cerr << "Error: src is null" << endl;return; }
-    string suf = src->label(sp);
-    ss << outdir << "sigmap_" << suf << ".dat";
-    string filename = ss.str();
-    ofstream outFile(filename, ios::trunc);
-    if (!outFile) {
-        cerr << "Error opening file for writing: " + filename << endl;
+    if (!src) {
+        std::cerr << "Error: src is null\n";
         return;
     }
 
-    outFile << "# Altitude (m), H3+ Conductivity (S/m), CH5+ Conductivity (S/m), C3Hn+ Conductivity (S/m), Electron Conductivity (S/m), Total Conductivity (S/m)\n";
-    for (size_t z = 0; z < world.nz; ++z) {
-        outFile << world.Z[z] << "\t "
-                << sigmaP_H3p[z] << "\t "
-                << sigmaP_CH5p[z] << "\t "
-                << sigmaP_C3Hnp[z] << "\t "
-                << sigmaP_e[z] << "\t "
-                << sigmaP[z] << "\n";
-    }
-    outFile.close();
-    cout << "Conductivity data written to " << filename << endl;
-}
+    const std::string suf = src->label(sp);
+    const std::string filename = outdir + "sigmap_" + suf + ".dat";
 
+    std::vector<utils::io::MetaLine> meta = {
+        {"run_ID", sp.runid},
+        {"quantity", "Pedersen_conductivity"},
+        {"layout", "rows=z_index (0..nz-1)"},
+        {"nz", std::to_string(world.nz)},
+        {"Z_units", "km"},
+        {"conductivity_units", "mho m-1"},
+    };
+
+    const std::vector<std::string> cols = {
+        "Z [km]",
+        "Sigma_P_H3p [mho m-1]",
+        "Sigma_P_CH5p [mho m-1]",
+        "Sigma_P_C3Hnp [mho m-1]",
+        "Sigma_P_e [mho m-1]",
+        "Sigma_P [mho m-1]"
+    };
+
+    const int colw = 14;
+    const int precision = 8;
+
+    const bool ok = utils::io::write_dat_table_fixed_width(
+        filename,
+        "Conduct model output: Pedersen conductivity vs altitude",
+        meta,
+        cols,
+        world.nz,
+        [&](int z, std::ostream& os, int w) {
+            os << std::right
+               << std::setw(w) << world.Z[z]/1e3  << " "
+               << std::setw(w) << sigmaP_H3p[z]    << " "
+               << std::setw(w) << sigmaP_CH5p[z]   << " "
+               << std::setw(w) << sigmaP_C3Hnp[z]  << " "
+               << std::setw(w) << sigmaP_e[z]      << " "
+               << std::setw(w) << sigmaP[z];
+        },
+        colw,
+        precision
+    );
+
+    if (ok) std::cout << "Conductivity written to: " << filename << "\n";
+    else    std::cerr << "Failed to write conductivity to: " << filename << "\n";
+}
 
 double Conductivity::getConductance() {
     // Integrate conductivity over altitude to get conductance (S)

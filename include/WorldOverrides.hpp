@@ -19,5 +19,7 @@ struct WorldOverrides {
     std::optional<double> g_m_s2;   // gravity
     std::optional<double> n0_cm3;   // reference density
     std::optional<double> Zref_m;   // reference altitude for n0
+    std::optional<double> Z1_m;     // top of the world (overrides World1D default)
+    std::optional<double> Bdipang_deg; // dip angle of the magnetic field in degrees (90 = vertical, 0 = horizontal)
 
 };

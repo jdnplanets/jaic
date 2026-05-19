@@ -31,12 +31,19 @@ struct SimParams {
     float dz;           // Size of each bin in m, derived from Z0, Z1, and nbinsZ. 
     float dzcm;         // in cm
 
-    // Energy grid definition
+    // Used energy grid definition
     float E0      = 1.0f;                         // bottom of energy range in eV (edge 0)
     float Emax;                                   // top of energy range in eV (edge nbinsE); derived from E0/decades
     static constexpr float decades = 6.0f;        // number of decades in energy range (defines Emax = E0*10^decades)
-    static constexpr int nE        = 100;           // Number of energy bins in the energy grid
+    static constexpr int nE        = 500;         // Number of energy bins in the energy grid
     EgridType egridType = EgridType::Logarithmic; // type of energy grid (logarithmic or linear)
+
+    //Energy grid of input files (precomputed)
+    static constexpr float E0_in      = 1.0f;        // bottom of energy range in eV (edge 0)
+    static constexpr float Emax_in    = 1e6f;        // top of energy range in eV (edge nbinsE); derived from E0/decades
+    static constexpr float decades_in = 6.0f;        // number of decades in energy range (defines Emax = E0*10^decades)
+    static constexpr int nE_in        = 100;         // Number of energy bins in the energy grid
+    EgridType egridType_in = EgridType::Logarithmic; // type of energy grid (logarithmic or linear) 
 
 
     // Angular / energy discretization
@@ -53,7 +60,7 @@ struct SimParams {
     const float  Emin         = 7.0f;   // Minimum energy of alive electrons in eV
 
 
-    const float  cosThetaMean = 0.5f;   // Mean of the cosine of the scattering angle for the two-stream approximation
+    const float  cosThetaMean = 0.64f;   // Mean of the cosine of the scattering angle for the two-stream approximation
 
 
     // Collision typees included
@@ -102,6 +109,10 @@ struct SimParams {
 
     // ---------- Indexing ----------
     EGRID_HD inline int EToe(float E) const {
+        return Egrid::EToIndex_static_typed(E, nbinsE, E0, EgridParam(), egridType);
+    }
+
+    EGRID_HD inline int Etoe(float E) const {
         return Egrid::EToIndex_static_typed(E, nbinsE, E0, EgridParam(), egridType);
     }
 

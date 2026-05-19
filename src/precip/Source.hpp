@@ -30,6 +30,8 @@ struct Params {
   size_t N = 10000;       // Number of primary particles  
   float Zinit;            // Initial position in m
   float Einit;            // energy in eV
+  float Emin = 1e3f;      // minimum source sampling energy in eV
+  float Emax = 1e6f;      // maximum source sampling energy in eV
   std::string runid = ""; // run identifier, e.g. "TestRun". Default is empty. Used to generate output file names and banners. }; 
 };
 
@@ -57,16 +59,16 @@ public:
 protected:
   float Etov(float E) const {
     // Convert energy in eV to velocity in m/s using relativistic formula
-    float gamma = 1.0f + E * constants::eV / (constants::m_e * constants::c * constants::c);
-    return constants::c * std::sqrt(1.0f - 1.0f / (gamma * gamma)); // Relativistic
-    // return v0 = std::sqrt(2*E/constants::m_e);   Non-rel
+    // float gamma = 1.0f + E * constants::eV / (constants::m_e * constants::c * constants::c);
+    // return constants::c * std::sqrt(1.0f - 1.0f / (gamma * gamma)); // Relativistic
+    return std::sqrt(2*E*constants::eV/constants::m_e); //  Non-rel
   }
 
   float vtoE(float v) const {
     // Convert velocity in m/s to energy in eV using relativistic formula
-    float gamma = 1.0f / std::sqrt(1.0f - v * v / (constants::c * constants::c));
-    return (gamma - 1.0f) * constants::m_e * constants::c * constants::c / constants::eV; // Relativistic
-    // return 0.5*constants::m_e*v*v/constants::eV;   Non-rel
+    // float gamma = 1.0f / std::sqrt(1.0f - v * v / (constants::c * constants::c));
+    // return (gamma - 1.0f) * constants::m_e * constants::c * constants::c / constants::eV; // Relativistic
+    return 0.5*constants::m_e*v*v/constants::eV;   //Non-rel
   }
 
 };

@@ -110,7 +110,7 @@ int get_collision_type(const SimParams&    p,
         cum_prob += sigmas[i] / total_sigma;
         if (r < cum_prob) return i;
     }
-    return p.elastic; // Default to elastic collision if no type is found
+    return p.elastic; // Default to elastic collision if no type is found. Happens very occasionally if r = 1.0000000
 }
 
 __device__ __host__
@@ -196,30 +196,32 @@ void scale_velocity_deltaE(float& vz, float& vy, float deltaE, float& E)
 // Elastic collision
 __device__ __host__
 void elastic(const int e, 
+             const int z,
              const SimParams& p, 
              DeviceArrays a,
              const int i) {
 
     screened_rutherford_scattering(e, p, a, i);
 #ifdef __CUDA_ARCH__
-    atomicAdd(&a.colcount[p.elastic * p.nbinsE + e], 1);
+    atomicAdd(&a.colcount[(p.elastic * p.nbinsZ + z) * p.nbinsE + e], 1);
 #else
-    a.colcount[p.elastic * p.nbinsE + e]++;
+    a.colcount[(p.elastic * p.nbinsZ + z) * p.nbinsE + e]++;
 #endif
 }
 
 // ionisation collision
 __device__ __host__
 void ionisation(const int e,
+                const int z,
                 const SimParams& p, 
                 DeviceArrays a,
                 const int i,
                 int* Nactive)
 {
 #ifdef __CUDA_ARCH__
-    atomicAdd(a.colcount + p.ionisation * p.nbinsE + e, 1);
+    atomicAdd(&a.colcount[(p.ionisation * p.nbinsZ + z) * p.nbinsE + e], 1);
 #else
-    a.colcount[p.ionisation * p.nbinsE + e]++;
+    a.colcount[(p.ionisation * p.nbinsZ + z) * p.nbinsE + e]++;
 #endif
 
     float E_ion = a.deltaEs[p.ionisation]; // ionisation threshold energy H2 eV.
@@ -235,14 +237,13 @@ void ionisation(const int e,
     if (E_scat <= 1.0f) E_scat = 1.0f;  // minimum energy for the scattered electron
 
     //Record the altitude of the ionisation event and the energy of the ejected electron
-    int k = static_cast<int>(a.z[i] / p.dz);
     int ej = p.EToe(E_ej);
 #ifdef __CUDA_ARCH__
-    atomicAdd(&a.nion[k * p.nbinsE + ej], 1);
+    atomicAdd(&a.nion[z * p.nbinsE + ej], 1);
     atomicAdd(&Elost_primaries, E_ion);
     atomicAdd(&Egained_secondaries, E_ej);
 #else
-    a.nion[k * p.nbinsE + ej]++;
+    a.nion[z * p.nbinsE + ej]++;
 #endif
 
     // Elastically scatter the incident electron
@@ -261,6 +262,7 @@ void ionisation(const int e,
 
 __device__ __host__
 void excitation_triplet_a(const int e,
+                          const int z,
                           const SimParams& p, 
                           DeviceArrays a, 
                           const int i)
@@ -268,15 +270,16 @@ void excitation_triplet_a(const int e,
     isotropic_scattering(a.vz[i], a.vy[i], i);
     scale_velocity_deltaE(a.vz[i], a.vy[i], a.deltaEs[p.excitation_triplet_a], a.E[i]);
 #ifdef __CUDA_ARCH__
-    atomicAdd(&a.colcount[p.excitation_triplet_a * p.nbinsE + e], 1);
+    atomicAdd(&a.colcount[(p.excitation_triplet_a * p.nbinsZ + z) * p.nbinsE + e], 1);
 #else
-    a.colcount[p.excitation_triplet_a * p.nbinsE + e]++;
+    a.colcount[(p.excitation_triplet_a * p.nbinsZ + z) * p.nbinsE + e]++;
 #endif
     
 }
 
 __device__ __host__
 void excitation_triplet_b(const int e,
+                          const int z,
                           const SimParams& p, 
                           DeviceArrays a, 
                           const int i)
@@ -284,14 +287,15 @@ void excitation_triplet_b(const int e,
     isotropic_scattering(a.vz[i], a.vy[i], i);
     scale_velocity_deltaE(a.vz[i], a.vy[i], a.deltaEs[p.excitation_triplet_b], a.E[i]);
 #ifdef __CUDA_ARCH__
-    atomicAdd(&a.colcount[p.excitation_triplet_b * p.nbinsE + e], 1);
+    atomicAdd(&a.colcount[(p.excitation_triplet_b * p.nbinsZ + z) * p.nbinsE + e], 1);
 #else
-    a.colcount[p.excitation_triplet_b * p.nbinsE + e]++;
+    a.colcount[(p.excitation_triplet_b * p.nbinsZ + z) * p.nbinsE + e]++;
 #endif
 }
 
 __device__ __host__
 void excitation_triplet_c(const int e,
+                          const int z,
                           const SimParams& p, 
                           DeviceArrays a, 
                           const int i)
@@ -299,14 +303,15 @@ void excitation_triplet_c(const int e,
     isotropic_scattering(a.vz[i], a.vy[i], i);
     scale_velocity_deltaE(a.vz[i], a.vy[i], a.deltaEs[p.excitation_triplet_c], a.E[i]);
 #ifdef __CUDA_ARCH__
-    atomicAdd(&a.colcount[p.excitation_triplet_c * p.nbinsE + e], 1);
+    atomicAdd(&a.colcount[(p.excitation_triplet_c * p.nbinsZ + z) * p.nbinsE + e], 1);
 #else
-    a.colcount[p.excitation_triplet_c * p.nbinsE + e]++;
+    a.colcount[(p.excitation_triplet_c * p.nbinsZ + z) * p.nbinsE + e]++;
 #endif
 }
 
 __device__ __host__
 void excitation_triplet_e(const int e,
+                          const int z,
                           const SimParams& p, 
                           DeviceArrays a, 
                           const int i)
@@ -314,14 +319,15 @@ void excitation_triplet_e(const int e,
     isotropic_scattering(a.vz[i], a.vy[i], i);
     scale_velocity_deltaE(a.vz[i], a.vy[i], a.deltaEs[p.excitation_triplet_e], a.E[i]);
 #ifdef __CUDA_ARCH__
-    atomicAdd(&a.colcount[p.excitation_triplet_e * p.nbinsE + e], 1);
+    atomicAdd(&a.colcount[(p.excitation_triplet_e * p.nbinsZ + z) * p.nbinsE + e], 1);
 #else
-    a.colcount[p.excitation_triplet_e * p.nbinsE + e]++;
+    a.colcount[(p.excitation_triplet_e * p.nbinsZ + z) * p.nbinsE + e]++;
 #endif
 }
 
 __device__ __host__
 void excitation_singlet_B(const int e,
+                          const int z,
                           const SimParams& p, 
                           DeviceArrays a,
                           const int i)
@@ -329,21 +335,16 @@ void excitation_singlet_B(const int e,
     screened_rutherford_scattering(e, p, a, i);
     scale_velocity_deltaE(a.vz[i], a.vy[i], a.deltaEs[p.excitation_singlet_B], a.E[i]);
     // Record the altitude and energy of the excitation event
-    int k = static_cast<int>(a.z[i] / p.dz);
 #ifdef __CUDA_ARCH__
-    atomicAdd(&a.nexB[k * p.nbinsE + e], 1);
+    atomicAdd(&a.colcount[(p.excitation_singlet_B * p.nbinsZ + z) * p.nbinsE + e], 1);
 #else
-    a.nexB[k * p.nbinsE + e]++;
-#endif
-#ifdef __CUDA_ARCH__
-    atomicAdd(&a.colcount[p.excitation_singlet_B * p.nbinsE + e], 1);
-#else
-    a.colcount[p.excitation_singlet_B * p.nbinsE + e]++;
+    a.colcount[(p.excitation_singlet_B * p.nbinsZ + z) * p.nbinsE + e]++;
 #endif
 }
 
 __device__ __host__
 void excitation_singlet_C(const int e,
+                          const int z,
                           const SimParams& p, 
                           DeviceArrays a,
                           const int i)
@@ -351,68 +352,59 @@ void excitation_singlet_C(const int e,
     screened_rutherford_scattering(e, p, a, i);
     scale_velocity_deltaE(a.vz[i], a.vy[i], a.deltaEs[p.excitation_singlet_C], a.E[i]);
     // Record the altitude and energy of the excitation event
-    int k = static_cast<int>(a.z[i] / p.dz);
 #ifdef __CUDA_ARCH__
-    atomicAdd(&a.nexC[k * p.nbinsE + e], 1);
+    atomicAdd(&a.colcount[(p.excitation_singlet_C * p.nbinsZ + z) * p.nbinsE + e], 1);
 #else
-    a.nexC[k * p.nbinsE + e]++;
-#endif
-#ifdef __CUDA_ARCH__
-    atomicAdd(&a.colcount[p.excitation_singlet_C * p.nbinsE + e], 1);
-#else
-    a.colcount[p.excitation_singlet_C * p.nbinsE + e]++;
+    a.colcount[(p.excitation_singlet_C * p.nbinsZ + z) * p.nbinsE + e]++;
 #endif
 }
 
 __device__ __host__
 void excitation_singlet_EF(const int e,
-                          const SimParams& p, 
-                          DeviceArrays a,
-                          const int i)
+                           const int z,
+                           const SimParams& p, 
+                           DeviceArrays a,
+                           const int i)
 {
     screened_rutherford_scattering(e, p, a, i);
     scale_velocity_deltaE(a.vz[i], a.vy[i], a.deltaEs[p.excitation_singlet_EF], a.E[i]);
     // Record the altitude and energy of the excitation event
-    int k = static_cast<int>(a.z[i] / p.dz);
 #ifdef __CUDA_ARCH__
-    atomicAdd(&a.nexEF[k * p.nbinsE + e], 1);
+    atomicAdd(&a.colcount[(p.excitation_singlet_EF * p.nbinsZ + z) * p.nbinsE + e], 1);
 #else
-    a.nexEF[k * p.nbinsE + e]++;
-#endif
-#ifdef __CUDA_ARCH__
-    atomicAdd(&a.colcount[p.excitation_singlet_EF * p.nbinsE + e], 1);
-#else
-    a.colcount[p.excitation_singlet_C * p.nbinsE + e]++;
+    a.colcount[(p.excitation_singlet_EF * p.nbinsZ + z) * p.nbinsE + e]++;
 #endif
 }
 
 __device__ __host__
 void vibrational(const int e,
-                          const SimParams& p, 
-                          DeviceArrays a, 
-                          const int i)
+                 const int z,
+                 const SimParams& p, 
+                 DeviceArrays a, 
+                 const int i)
 { 
     isotropic_scattering(a.vz[i], a.vy[i], i);
     scale_velocity_deltaE(a.vz[i], a.vy[i], a.deltaEs[p.vibrational], a.E[i]);
 #ifdef __CUDA_ARCH__
-    atomicAdd(&a.colcount[p.vibrational * p.nbinsE + e], 1);
+    atomicAdd(&a.colcount[(p.vibrational * p.nbinsZ + z) * p.nbinsE + e], 1);
 #else
-    a.colcount[p.vibrational * p.nbinsE + e]++; 
+    a.colcount[(p.vibrational * p.nbinsZ + z) * p.nbinsE + e]++; 
 #endif
 }
 
 __device__ __host__
 void rotational(const int e,
-                          const SimParams& p, 
-                          DeviceArrays a, 
-                          const int i)
+                const int z,
+                const SimParams& p, 
+                DeviceArrays a, 
+                const int i)
 {
     isotropic_scattering(a.vz[i], a.vy[i], i);
     scale_velocity_deltaE(a.vz[i], a.vy[i], a.deltaEs[p.rotational], a.E[i]);
 #ifdef __CUDA_ARCH__
-    atomicAdd(&a.colcount[p.rotational * p.nbinsE + e], 1);
+    atomicAdd(&a.colcount[(p.rotational * p.nbinsZ + z) * p.nbinsE + e], 1);
 #else
-    a.colcount[p.rotational * p.nbinsE + e]++;
+    a.colcount[(p.rotational * p.nbinsZ + z) * p.nbinsE + e]++;
 #endif
 }
 // **************************************************************************************
@@ -425,17 +417,24 @@ void processElectron(int i,
                         const SimParams p,
                         ElectronLossCounters* N) {
 
-    // Advance the electron
-    a.z[i] += a.vz[i] * a.dt[i];
-    a.y[i] += a.vy[i] * a.dt[i];
+    // Step to advance the electron
+    float dz_step = a.vz[i] * a.dt[i];
+    float dy_step = a.vy[i] * a.dt[i];
+    float r = getRandom(i);
+    a.z[i] += dz_step * r;
+    a.y[i] += dy_step * r;
  
     // Get the electron's energy
 
     int e = p.EToe(a.E[i]);
+    int z = static_cast<int>(a.z[i] / p.dz);
+    z = max(0, min(z, p.nbinsZ - 1));
 
     // Check if the electron is still alive. If not, increment the total number of electrons 
     // simulated
-    if (a.z[i] < 0 || a.z[i] > p.Z1 || a.E[i] < p.Emin || a.y[i] < -10000e3 || a.y[i] > 10000e3) {
+    //  
+    if (a.z[i] < 0 || a.z[i] > p.Z1 || a.E[i] < p.Emin || a.y[i] < -20000e3 || a.y[i] > 20000e3) {
+        // printf("Electron %d lost: z = %f m, y = %f m, E = %f eV\n", i, a.z[i], a.y[i], a.E[i]);
 #ifdef __CUDA_ARCH__
         if (a.z[i] < 0.0f) {
             atomicAdd(&N->Nlost_bottom, 1);
@@ -467,12 +466,21 @@ void processElectron(int i,
     }
 
     // Get the neutral density at the electron's altitude
-    int zinx = static_cast<int>(a.z[i] / p.dz);
-    zinx = max(0, min(zinx, p.nbinsZ - 1));
-    float ndens = a.nH2[zinx]; // cm^-3
+    float ndens = a.nH2[z]; // cm^-3
 
     // Get the cross sections for all collision types and the total for this energy
-    float totsig = a.total_sigma[e];
+    // Linear interpolation
+    int e_low = e;
+    int e_high = min(e + 1, p.nE - 1);
+    float frac = a.E[i] - (e_low * p.dE(e_low));
+    frac = frac / p.dE(e_low);
+    frac = max(0.0f, min(1.0f, frac));
+    float totsig_low = a.total_sigma[e_low];
+    float totsig_high = a.total_sigma[e_high];
+    float totsig = totsig_low + frac * (totsig_high - totsig_low);
+
+    // Get the cross sections for all collision types and the total for this energy
+    // float totsig = a.total_sigma[e];
 
     // Each thread gets its own small array of size p.nCollisions:
     // (small enough to live on the stack)
@@ -480,8 +488,16 @@ void processElectron(int i,
 
     // Fill the local array from a.sigmasE:
     for (int j = 0; j < p.nCollisions; ++j) {
-        sigmas_local[j] = a.sigmasE[e * p.nCollisions + j];
+        int e_low = e;
+        int e_high = min(e + 1, p.nE - 1);
+        float frac = a.E[i] - (e_low * p.dE(e_low)); // fractional part within energy bin
+        frac = frac / p.dE(e_low);
+        frac = max(0.0f, min(1.0f, frac));
+        float sigma_low = a.sigmasE[e_low * p.nCollisions + j];
+        float sigma_high = a.sigmasE[e_high * p.nCollisions + j];
+        sigmas_local[j] = sigma_low + frac * (sigma_high - sigma_low);
     }
+
 
     // Check if the electron collides
     bool collision = test_collision(ndens, totsig, a, i);
@@ -492,47 +508,52 @@ void processElectron(int i,
 
         switch (coltype) {
             case p.elastic:
-                elastic(e, p, a, i);
+                elastic(e, z, p, a, i);
                 break;
             case p.ionisation:
-                ionisation(e, p, a, i, &(N->Nactive));
+                ionisation(e, z, p, a, i, &(N->Nactive));
                 break;
             case p.excitation_triplet_a:
-                excitation_triplet_a(e, p, a, i);
+                excitation_triplet_a(e, z, p, a, i);
                 break;
             case p.excitation_triplet_b:
-                excitation_triplet_b(e, p, a, i);
+                excitation_triplet_b(e, z, p, a, i);
                 break;
             case p.excitation_triplet_c:
-                excitation_triplet_c(e, p, a, i);
+                excitation_triplet_c(e, z, p, a, i);
                 break;
             case p.excitation_triplet_e:
-                excitation_triplet_e(e, p, a, i);
+                excitation_triplet_e(e, z, p, a, i);
                 break;
             case p.excitation_singlet_B:
-                excitation_singlet_B(e, p, a, i);
+                excitation_singlet_B(e, z, p, a, i);
                 break;
             case p.excitation_singlet_C:
-                excitation_singlet_C(e, p, a, i);
+                excitation_singlet_C(e, z, p, a, i);
                 break;
             case p.vibrational:
-                vibrational(e, p, a, i);
+                vibrational(e, z, p, a, i);
                 break;
             case p.rotational:
-                rotational(e, p, a, i);
+                rotational(e, z, p, a, i);
                 break;
             case p.excitation_singlet_EF:
-                excitation_singlet_EF(e, p, a, i);
+                excitation_singlet_EF(e, z, p, a, i);
                 break;
             default:
                 break;
         }
+
     }
+
+    // Advance remainder of the step
+    a.z[i] += (1.0f - r) * dz_step;
+    a.y[i] += (1.0f - r) * dy_step;
 
     // Adapt the timestep for the next iteration based on the electron's speed and the collision probability, to improve efficiency.
     float speed = sqrt(a.vz[i] * a.vz[i] + a.vy[i] * a.vy[i]) * 1e2; // cm/s
-    float maxdt = 0.01 / (speed * ndens * totsig); // all cm -ln(0.99)/nsv
-    a.dt[i] = (maxdt < p.maxdt) ? maxdt : p.maxdt;
+    float dt_prob = 0.01 / (speed * ndens * totsig); // all cm -ln(0.99)/nsv
+    a.dt[i] = (dt_prob < p.maxdt) ? dt_prob : p.maxdt;
 
 }
 
@@ -617,6 +638,39 @@ void runPrimariesKernel(DeviceArrays d_arrs, DeviceArrays h_arrs, SimParams p) {
     cudaMemcpyToSymbol(Ealive, &zero, sizeof(float));
     // End of cuRAND setup
 
+    // Periodically flush device-side float counters into host-side double accumulators
+    // to reduce precision loss from long-running atomic accumulation.
+    constexpr int ENERGY_FLUSH_INTERVAL = 5000;
+    double Elost_primaries_host = 0.0;
+    double Edied_primaries_host = 0.0;
+    double Egained_secondaries_host = 0.0;
+    double Ealive_host = 0.0;
+
+    auto flushEnergyCounters = [&](bool reset_device_counters) {
+        float Elost_chunk = 0.0f;
+        float Edied_chunk = 0.0f;
+        float Egained_chunk = 0.0f;
+        float Ealive_chunk = 0.0f;
+
+        cudaMemcpyFromSymbol(&Elost_chunk, Elost_primaries, sizeof(float), 0, cudaMemcpyDeviceToHost);
+        cudaMemcpyFromSymbol(&Edied_chunk, Edied_primaries, sizeof(float), 0, cudaMemcpyDeviceToHost);
+        cudaMemcpyFromSymbol(&Egained_chunk, Egained_secondaries, sizeof(float), 0, cudaMemcpyDeviceToHost);
+        cudaMemcpyFromSymbol(&Ealive_chunk, Ealive, sizeof(float), 0, cudaMemcpyDeviceToHost);
+
+        Elost_primaries_host += static_cast<double>(Elost_chunk);
+        Edied_primaries_host += static_cast<double>(Edied_chunk);
+        Egained_secondaries_host += static_cast<double>(Egained_chunk);
+        Ealive_host += static_cast<double>(Ealive_chunk);
+
+        if (reset_device_counters) {
+            float z = 0.0f;
+            cudaMemcpyToSymbol(Elost_primaries, &z, sizeof(float));
+            cudaMemcpyToSymbol(Edied_primaries, &z, sizeof(float));
+            cudaMemcpyToSymbol(Egained_secondaries, &z, sizeof(float));
+            cudaMemcpyToSymbol(Ealive, &z, sizeof(float));
+        }
+    };
+
     blocksPerGrid = (p.N + threadsPerBlock - 1) / threadsPerBlock;
 
     // Main loop
@@ -642,13 +696,15 @@ void runPrimariesKernel(DeviceArrays d_arrs, DeviceArrays h_arrs, SimParams p) {
 
         // Copy the counters back to the host
         cudaMemcpy(&counters, d_counters, sizeof(ElectronLossCounters), cudaMemcpyDeviceToHost);
+
+        if ((j % ENERGY_FLUSH_INTERVAL) == 0) {
+            flushEnergyCounters(true);
+        }
         
         if (counters.Nactive <= 0) { // If there are no more active electrons, stop the simulation
             std::cout << "\nReached minimum number of active electrons. Stopping...\n";
             advance = false; // Stop the GPU execution
         }
-
-        // if (j > 80000) advance = false; // For testing purposes, stop after 100 iterations
     }
     
 
@@ -662,19 +718,11 @@ void runPrimariesKernel(DeviceArrays d_arrs, DeviceArrays h_arrs, SimParams p) {
 
     size_t size_theta = p.nTheta * p.nE * sizeof(int);
     cudaMemcpy(h_arrs.theta_sampled, d_arrs.theta_sampled, size_theta, cudaMemcpyDeviceToHost);
-    size_t size_colcount = p.nCollisions * p.nbinsE * sizeof(int);
+    size_t size_colcount = p.nCollisions * p.nbinsZ * p.nbinsE * sizeof(int);
     cudaMemcpy(h_arrs.colcount, d_arrs.colcount, size_colcount, cudaMemcpyDeviceToHost);
-    size_t size_nexB = p.nbinsZ * p.nbinsE * sizeof(int);
-    cudaMemcpy(h_arrs.nexB, d_arrs.nexB, size_nexB, cudaMemcpyDeviceToHost);
-    size_t size_nexC = p.nbinsZ * p.nbinsE * sizeof(int);
-    cudaMemcpy(h_arrs.nexC, d_arrs.nexC, size_nexC, cudaMemcpyDeviceToHost);
-    size_t size_nexEF = p.nbinsZ * p.nbinsE * sizeof(int);
-    cudaMemcpy(h_arrs.nexEF, d_arrs.nexEF, size_nexEF, cudaMemcpyDeviceToHost);
-    // Copy the total energy lost
-    float Elost_primaries_host, Edied_primaries_host, Egained_secondaries_host;
-    cudaMemcpyFromSymbol(&Elost_primaries_host, Elost_primaries, sizeof(float), 0, cudaMemcpyDeviceToHost);
-    cudaMemcpyFromSymbol(&Edied_primaries_host, Edied_primaries, sizeof(float), 0, cudaMemcpyDeviceToHost);
-    cudaMemcpyFromSymbol(&Egained_secondaries_host, Egained_secondaries, sizeof(float), 0, cudaMemcpyDeviceToHost);
+
+    // Flush any remaining device-counter contributions from the final chunk.
+    flushEnergyCounters(false);
 
 
     // Free all device memory
@@ -694,15 +742,10 @@ void runPrimariesKernel(DeviceArrays d_arrs, DeviceArrays h_arrs, SimParams p) {
     cudaFree(d_arrs.alive);
     cudaFree(d_arrs.dt);
     cudaFree(d_arrs.E);
-    // cudaFree(d_arrs.zfinal);
-    // cudaFree(d_arrs.yfinal);
     cudaFree(d_arrs.nion);
-    // cudaFree(d_arrs.nionz);
     cudaFree(d_arrs.theta_sampled);
     cudaFree(d_arrs.colcount);
-    cudaFree(d_arrs.nexB);
-    cudaFree(d_arrs.nexC);
-    cudaFree(d_arrs.nexEF);
+
 
     // Accumulate the energy of alive electrons remaining at the end of the simulation
     double total_alive_energy = 0.0;

@@ -318,32 +318,6 @@ void H2Spectrum::read_franck_condon_factors_fw(const string& filename, string st
     franck_condon_factors[state] = fcf_matrix;
 }
 
-// // Function to call the code that reads the continuum data for each file
-// void H2Spectrum::read_continuum_data(const string& filename) {
-//     cout << "Reading continuum data..." << endl;
-
-//     ifstream infile(datadir+filename);
-//     if (!infile.is_open()) {
-//         cerr << "Error: Could not open file " << filename << endl;
-//         return;
-//     }
-
-//     string line;
-//     while (getline(infile, line)) {
-//         istringstream iss(line);
-//         string state;
-//         int vu, Ju;
-//         double A_tot, df;
-
-//         // Read the line into variables
-//         if (iss >> state >> vu >> Ju >> A_tot >> df) {
-//             // Store the A_tot value in the map
-//             continuum[state][{vu, Ju}] = df;
-//         }
-//     }
-
-//     infile.close();
-// }
 
 
 void H2Spectrum::filter_negligible_transitions(double threshold) {

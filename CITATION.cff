@@ -16,6 +16,6 @@ preferred-citation:
   journal: "Journal of Geophysical Research: Space Physics"
   year: 2026
   volume: "<volume>"
-  issue: "<issue>"        # optional
-  pages: "<start-end>"    # optional
+  issue: "<issue>"       
+  pages: "<start-end>"   
   doi: "<10.xxxx/xxxxx>"

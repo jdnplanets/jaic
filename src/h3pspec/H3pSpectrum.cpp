@@ -6,6 +6,14 @@
  * Licensed under the MIT License. See the LICENSE file in the project root for full license information.
  */
 
+
+/* 
+This file implements the H3pSpectrum class, which computes the H3+ emission spectrum 
+based on input parameters such as temperature and H3+ density.
+The output spectrum is in units of W m^-2 sr^-1 μm^-1 versus wavelength in μm.
+This calculation is based on the line list from Neale et al. (1996) and the partition function from Miller et al. (2013)
+*/
+
  // H3pSpectrum.cpp
 
 #include <iostream>
@@ -167,7 +175,6 @@ void H3pSpectrum::computeQ() {
 void H3pSpectrum::compute_line_emission_rates(){
     emission_rates.clear();
 
-    // cout << "Computing line emission rates..." << endl;
     // Compute emissions for each transition
     for (const auto& ln : lines) {
         

@@ -18,6 +18,7 @@ The temperature profile is a simple piecewise linear ramp defined by parameters 
 #include "World1D.hpp"
 #include "WorldOverrides.hpp"
 #include "FileIO.hpp"
+#include "ArrayOps.hpp"
 #include <fstream>
 #include <sstream>
 #include <cstdlib>     // getenv
@@ -47,12 +48,14 @@ struct Jupiter final : public World1D {
         // Domain
         double Z0_m = 0.0;          // bottom of domain (m)
         double Z1_m = 3000e3;       // top of domain (m)
-        int    nz   = 300;          // number of altitude bins
+        int    nz   = 1500;          // number of altitude bins
 
         // Magnetic field
-        double B_T  = 0.0015;       // Tesla
+        double B_T  = 0.001;       // Tesla
+        double Bdipang_deg = 90.0; // dip angle of the magnetic field in degrees (90 = vertical, 0 = horizontal)
 
         // Temperature profile 
+        std::string T_file  = "grodent01T.bin";
         double T0_K     = 200.0;    // temperature at zTmin_km (K)
         double T1_K     = 1200.0;   // temperature at zTmax_km (K)
         double zTmin_km = 200.0;    // altitude where T = T0_K (km)
@@ -71,7 +74,7 @@ struct Jupiter final : public World1D {
         std::string data_dir;
 
         // Pressure->altitude conversion parameters 
-        double H_km  = 27.0;    // scale height (km)
+        double H_km  = 27.0;    // scale height (km) appropriate for hydrocarbons (as per Gladstone et al., 1996 axes)
         double p0_mbar = 1e3;   // reference pressure (mbar)
     };
 
@@ -100,19 +103,19 @@ struct Jupiter final : public World1D {
         World1D::apply_overrides(o);
         // Keep cfg consistent with base
         cfg.B_T = B;
+        cfg.Bdipang_deg = Bdipang;
     }
 
 
 protected:
     void populate() override {
         // nH2 from binary file
-        read_nH2_binary();
+        fill_nH2_profile();
 
-        // Temperature profile (simple piecewise linear ramp)
+        // Temperature profile
         fill_temperature_profile();
 
         // Hydrocarbon densities from mixing ratio CSVs
-        //    density(z) = nH2(z) * mix(z)
         nCH4  = compute_hydrocarbon_density(cfg.mixCH4_file);
         nC2H2 = compute_hydrocarbon_density(cfg.mixC2H2_file);
         nC2H4 = compute_hydrocarbon_density(cfg.mixC2H4_file);
@@ -137,32 +140,32 @@ private:
     // ---------------------------
     // nH2 binary reader
     // ---------------------------
-    void read_nH2_binary() {
+    void fill_nH2_profile() {
         const std::string fullpath = path_join(cfg.data_dir, cfg.nH2_file);
-        utils::io::readFloatBinaryfileData(fullpath, nH2.data(), nz, 1);
+        std::vector<float> nH2_temp(nzin, 0.0f);
+        utils::io::readFloatBinaryfileData(fullpath, nH2_temp.data(), nzin, 1);
+        if (nz == nzin) {
+            nH2 = nH2_temp;
+        }
+        else {
+            // Otherwise, we need to interpolate nH2_temp onto the Z grid of length nz.
+            nH2 = utils::array::interp(Z_in, nH2_temp, Z); // interp is a utility function that performs linear interpolation
+        }
     }
 
     // ---------------------------
     // Temperature profile
     // ---------------------------
     void fill_temperature_profile() {
-        const double T0 = cfg.T0_K;
-        const double T1 = cfg.T1_K;
-        const double zmin = cfg.zTmin_km;
-        const double zmax = cfg.zTmax_km;
-
-        const double m = (zmax != zmin) ? (T1 - T0) / (zmax - zmin) : 0.0;
-
-        for (int i = 0; i < nz; ++i) {
-            const double z_km = static_cast<double>(Z[i]) / 1e3;
-
-            if (z_km < zmin) {
-                T[i] = T0;
-            } else if (z_km < zmax) {
-                T[i] = m * (z_km - zmin) + T0;
-            } else {
-                T[i] = T1;
-            }
+        const std::string fullpath = path_join(cfg.data_dir, cfg.T_file);
+        std::vector<float> T_temp(nzin, 0.0f);
+        utils::io::readFloatBinaryfileData(fullpath, &T_temp[0], nzin, 1);
+        if (nz == nzin) {
+            T = utils::array::copy<double>(T_temp);
+        } 
+        else {
+            // Otherwise, we need to interpolate T_temp onto the Z grid of length nz.
+            T = utils::array::interp<double>(Z_in, T_temp, Z); // interp is a utility function that performs linear interpolation
         }
     }
 
@@ -198,6 +201,8 @@ private:
 
             HydrocarbonMixingRatios pt;
             pt.mix = mix;
+            //This can be done because the p v z relationship in Gladstone et al., 1996 is 
+            // essentially a simple exponential with scale height ~27 km, so the conversion is straightforward
             pt.z_km = cfg.H_km * std::log(cfg.p0_mbar / p_mbar);
 
             data.push_back(pt);
