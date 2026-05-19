@@ -25,6 +25,9 @@ in the energy grid.
 
 struct SimParams {
 
+    float P0;           // bottom of domain, Pa
+    float P1;           // top of domain, Pa
+    int nbinsP;         // Number of pressure bins. These are set by World1d
     float Z1;           // Top of the simulation domain in m (defines distance units)
     float Z0;           // Bottom of the simulation domain in m
     int nbinsZ;         // Number of altitude bins, derived from Z0, Z1, and dz. These are set by World1d
@@ -79,7 +82,6 @@ struct SimParams {
         collisionCount // automatically equals the number of collisions
     };
     static constexpr int nCollisions = collisionCount;
-
 
     // Energy grid convenience functions
     
@@ -143,4 +145,38 @@ struct SimParams {
         e = clamp_bin(e);
         return Egrid::eTodE_static_typed(e, nbinsE, E0, EgridParam(), egridType);
     }
+
+    // Altitude grid convenience functions (reuse EGRID_HD for host/device compatibility))
+
+    // Must be set to point to host memory when called on host,
+    // and device memory when called on device.
+    const float* Z_edges = nullptr;  // size nbinsZ + 1
+
+    EGRID_HD inline int Ztoz(float Z) const {
+
+        if (Z_edges == nullptr || nbinsZ <= 0) return 0;
+
+        if (Z <= Z_edges[0]) return 0;
+        if (Z >= Z_edges[nbinsZ]) return nbinsZ - 1;
+
+        // Binary search to find the right bin
+        int lo = 0;
+        int hi = nbinsZ;
+
+        
+
+        while (hi - lo > 1) {
+            int mid = lo + (hi - lo) / 2;
+
+            if (Z_edges[mid] <= Z) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+
+        return lo;
+    }
+
+
 };

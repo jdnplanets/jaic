@@ -71,7 +71,7 @@ struct H3CH5IonChemistryModel final : IIonChemistryModel {
     {
         for (int z = 0; z < world.nz; ++z) {
             const double q = std::max(0.0, Qtot[z]);
-            const double nCH4 = (z < static_cast<int>(world.nCH4.size())) ? std::max(0.0, world.nCH4[z]) : 0.0;
+            const double nCH4 = (z < static_cast<int>(world.nCH4.size())) ? std::max(0.0f, world.nCH4[z]) : 0.0;
             const double T = (z < static_cast<int>(world.T.size())) ? world.T[z] : 0.0;
 
             const double a1 = IonChemistryRates::alpha_H3p(T);

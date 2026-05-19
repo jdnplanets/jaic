@@ -98,10 +98,11 @@ void IonDensity::readIonisationRates(Params& params,
         std::istringstream iss(line);
 
         if (isNewFormat) {
+            double P = 0.0;
             double Zkm = 0.0;
             double q = 0.0;
             double q1 = 0.0; // contribution from primaries only. Ignored here.
-            if (!(iss >> Zkm >> q >> q1)) continue;
+            if (!(iss >> P >> Zkm >> q >> q1)) continue;
             if (Zkm < world.Z0 || Zkm >= world.Z1) {
                 throw std::runtime_error(
                     "Ionisation rates file has out-of-range z_index=" + std::to_string(Zkm) +
@@ -133,6 +134,7 @@ void IonDensity::setIonisationRates(std::vector<float>& Qzin, const float F) {
     }
     for (int z = 0; z < world.nz; ++z) {
         Qtot[z] = static_cast<double>(Qzin[z]) * static_cast<double>(F);
+        // std::cout << Qtot[z] << "\n";
     }
 }
 
@@ -160,14 +162,15 @@ void IonDensity::writeIonDensityToFile() const {
     std::vector<utils::io::MetaLine> meta = {
         {"run_ID", sp.runid},
         {"quantity", "ion_densities"},
-        {"layout", "rows=z_index (0..nz-1)"},
-        {"nz", std::to_string(world.nz)},
-        {"Z_units", "km"},
+        {"layout", "rows=P_index (0..nP-1)"},
+        {"nP", std::to_string(world.nP)},
+        {"P_units", "Pa"},
         {"Qtot_units", "cm-3 s-1"},
         {"density_units", "cm-3"},
     };
 
     const std::vector<std::string> cols = {
+        "P [Pa]",
         "Z [km]",
         "Qtot [cm-3_s-1]",
         "nH3p [cm-3]",
@@ -187,12 +190,13 @@ void IonDensity::writeIonDensityToFile() const {
         world.nz,
         [&](int z, std::ostream& os, int w) {
             os << std::right
-               << std::setw(w) << world.Z[z]/1e3  << " "
-               << std::setw(w) << Qtot[z]          << " "
-               << std::setw(w) << world.nH3p[z]    << " "
-               << std::setw(w) << world.nCH5p[z]   << " "
-               << std::setw(w) << world.nC3Hnp[z]  << " "
-               << std::setw(w) << world.ne[z];
+            << std::setw(w) << world.P[z]       << " "
+            << std::setw(w) << world.Z[z]/1e3   << " "
+            << std::setw(w) << Qtot[z]          << " "
+            << std::setw(w) << world.nH3p[z]    << " "
+            << std::setw(w) << world.nCH5p[z]   << " "
+            << std::setw(w) << world.nC3Hnp[z]  << " "
+            << std::setw(w) << world.ne[z];
         },
         colw,
         precision
@@ -205,7 +209,7 @@ void IonDensity::writeIonDensityToFile() const {
 double IonDensity::getH3pColumnDensity() const {
     double columnDensity = 0.0;
     for (int z = 0; z < world.nz; ++z) {
-        columnDensity += static_cast<double>(world.nH3p[z]) * static_cast<double>(world.dzcm); // cm^-2
+        columnDensity += static_cast<double>(world.nH3p[z]) * static_cast<double>(world.dzcm[z]); // cm^-2
     }
     return columnDensity;
 }

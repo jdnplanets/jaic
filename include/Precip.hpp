@@ -34,6 +34,9 @@ class Precip {
     std::shared_ptr<Source> src;
 
     // simulation parameters
+    std::vector<float> Zinx;                                // altitude grid (precomputed)
+    std::vector<float> Z_edges;                             // altitude bin edges (nz+1) computed from Zinx
+    std::vector<float> dzcm;                                 // altitude bin size in cm (precomputed)
     std::vector<float> nH2;                                 // neutral H2 density [cm^-3]
     std::vector<float> sigmasE;                             // cross section for each collision type and energy bin [cm^2]
     std::vector<float> total_sigma;                         // total cross section for each energy bin [cm^2]
@@ -75,7 +78,7 @@ class Precip {
 
 public:
     SimParams p;   // simulation parameters
-    
+
     std::vector<float> qz; // ionisation rate per altitude bin
     std::vector<float> qz1; // ionisation rate per altitude bin
     std::vector<std::vector<double>> exRateB;   // excitation rate for singlet B as a function of energy and altitude (2D array: energy bin * altitude bin) // ptle-1 cm-1 s-1 eV-1
@@ -109,7 +112,6 @@ public:
     void writeFUVExRatesToFile();
     void writeExRatesToFile();
     void writeColcountToFile();
-    void writeSecQionToFile();
     void writeQionToFile(bool primariesOnly = false);
     void writeThetaToFile();
     void processSecondaries();
@@ -124,10 +126,6 @@ public:
 
     // Helper functions for coordinate and energy discretization
 
-    // Convert altitude bin index to altitude in m
-    inline double zToZ(int z) const {
-            return z * p.dz; // m
-    }
 
     // Energy-grid helper owned by Precip so conversion functions use p.nbinsE
     Egrid energyGrid;

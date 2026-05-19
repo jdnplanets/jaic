@@ -427,8 +427,7 @@ void processElectron(int i,
     // Get the electron's energy
 
     int e = p.EToe(a.E[i]);
-    int z = static_cast<int>(a.z[i] / p.dz);
-    z = max(0, min(z, p.nbinsZ - 1));
+    int z = p.Ztoz(a.z[i]);
 
     // Check if the electron is still alive. If not, increment the total number of electrons 
     // simulated
@@ -497,7 +496,6 @@ void processElectron(int i,
         float sigma_high = a.sigmasE[e_high * p.nCollisions + j];
         sigmas_local[j] = sigma_low + frac * (sigma_high - sigma_low);
     }
-
 
     // Check if the electron collides
     bool collision = test_collision(ndens, totsig, a, i);
@@ -705,6 +703,8 @@ void runPrimariesKernel(DeviceArrays d_arrs, DeviceArrays h_arrs, SimParams p) {
             std::cout << "\nReached minimum number of active electrons. Stopping...\n";
             advance = false; // Stop the GPU execution
         }
+
+        // if (j > 80000) advance = false; // For testing purposes, stop after 100 iterations
     }
     
 
@@ -720,6 +720,7 @@ void runPrimariesKernel(DeviceArrays d_arrs, DeviceArrays h_arrs, SimParams p) {
     cudaMemcpy(h_arrs.theta_sampled, d_arrs.theta_sampled, size_theta, cudaMemcpyDeviceToHost);
     size_t size_colcount = p.nCollisions * p.nbinsZ * p.nbinsE * sizeof(int);
     cudaMemcpy(h_arrs.colcount, d_arrs.colcount, size_colcount, cudaMemcpyDeviceToHost);
+
 
     // Flush any remaining device-counter contributions from the final chunk.
     flushEnergyCounters(false);

@@ -40,32 +40,40 @@ struct World1D {
     // -----------------------------
     // Geometry / grid
     // -----------------------------
-    float Z1   = 3000e3f;  // top of domain (m)
-    float Z0   = 0.0f;     // bottom of domain (m)
-    int   nz   = 300;      // number of altitude bins
+    float P0 = 1e5f; // Reference altitude pressure in Pa (1 bar)
+    float P1 = 1e-7f; // Top of atmosphere pressure in Pa (1e-12 bar is ~3000 km for Jupiter)
+    int nP = 500; // Number of pressure bins
+    std::vector<float> P; // Pressure grid in Pa, size nP
 
-    float dz   = 0.0f;     // bin size (m)   computed
-    float dzcm = 0.0f;     // bin size (cm)  computed
+
+    float Z1;  // top of domain (m)
+    float Z0;     // bottom of domain (m)
+    int   nz = nP;      // number of altitude bins
 
     std::vector<float> Z;  // altitude grid (m), size nz
+    std::vector<float> dz;     // bin size (m)   computed
+    std::vector<float> dzcm;     // bin size (cm)  computed
+    std::vector<float> Z_edges; // altitude edges (m), size nz+1 computed
 
     // -----------------------------
     // Geometry of input files (precomputed)
     // -----------------------------
-    static inline const int nzin = 300; // number of altitude bins in the input T file (grodent01T.bin)
-    static inline const float Z0_in = 0.0f;   
-    static inline const float Z1_in = 3000e3f;
-    std::vector<float> Z_in; // altitude grid of input file (m)
+    static inline const int nPin = 500; // number of pressure bins in the input atmosphere file (atmosphere.dat)
+    static inline const float P0_in = 1e5f;   
+    static inline const float P1_in = 1e-12f;
+    std::vector<float> P_in; // pressure grid of input file (bar)
 
     // -----------------------------
-    // State vectors (size nz)
+    // State vectors (size nP)
     // -----------------------------
     // Neutral densities (cm^-3)
-    std::vector<float>  nH2;
-    std::vector<double> nCH4;
-    std::vector<double> nC2H2;
-    std::vector<double> nC2H4;
-    std::vector<double> nC2H6;
+    std::vector<float> nH2; // read in as floats for GPU compatability
+    std::vector<float> nHe;
+    std::vector<float> nH;
+    std::vector<float> nCH4;
+    std::vector<float> nC2H2;
+    std::vector<float> nC2H4;
+    std::vector<float> nC2H6;
 
     // Ion & electron densities (cm^-3)
     std::vector<float> ne;
@@ -74,13 +82,11 @@ struct World1D {
     std::vector<float> nC3Hnp;
 
     // Temperature (K)
-    std::vector<double> T;
+    std::vector<float> T;
 
-    //Pressure (Pa)
-    std::vector<float> p;
 
     // Magnetic field (Tesla)
-    double B = 0.0015;
+    double B = 0.001;
     double Bdipang = 90.0; // dip angle of the magnetic field in degrees (90 = vertical, 0 = horizontal)
 
     // Ion chemistry model (chosen per-world in WorldFactory).
@@ -91,37 +97,34 @@ struct World1D {
 
     // Base constructor: set geometry, build Z, allocate arrays.
     // Derived classes "override" Z0/Z1/nz by calling this ctor with different values.
-    explicit World1D(float Z0_m = 0.0f, float Z1_m = 3000e3f, int nz_ = 300)
-        : Z1(Z1_m), Z0(Z0_m), nz(nz_)
+    explicit World1D(float P0_bar = 1.0f, float P1_bar = 1e-12f, int nP_ = 500)
+        : P0(P0_bar), P1(P1_bar), nP(nP_)
     {
-        if (nz <= 0) {
-            throw std::invalid_argument("World1D: nz must be > 0");
+        if (nP <= 0) {
+            throw std::invalid_argument("World1D: nP must be > 0");
         }
 
-        dz   = (Z1 - Z0) / static_cast<float>(nz);
-        dzcm = dz * 1e2f;
-
-        // Build Z grid
-        Z = utils::array::arange(Z0, Z1, dz);
-
-        // Build Z_in grid (for interpolation of input files) using a separate spacing.
-        // Do not overwrite dz/dzcm, which belong to the runtime grid.
-        const float dz_in = (Z1_in - Z0_in) / static_cast<float>(nzin);
-        Z_in = utils::array::arange(Z0_in, Z1_in, dz_in);
-
         // Allocate arrays (populate() will fill values)
-        nH2.assign(nz, 0.0f);
-        nCH4.assign(nz, 0.0);
-        nC2H2.assign(nz, 0.0);
-        nC2H4.assign(nz, 0.0);
-        nC2H6.assign(nz, 0.0);
+        P.assign(nP, 0.0f);
+        Z.assign(nP, 0.0f);
+        dz.assign(nP, 0.0f);
+        dzcm.assign(nP, 0.0f);
+        Z_edges.assign(nP + 1, 0.0f);
 
-        ne.assign(nz, 0.0f);
-        nH3p.assign(nz, 0.0f);
-        nCH5p.assign(nz, 0.0f);
-        nC3Hnp.assign(nz, 0.0f);
+        nH2.assign(nP, 0.0f);
+        nHe.assign(nP, 0.0f);
+        nH.assign(nP, 0.0f);
+        nCH4.assign(nP, 0.0);
+        nC2H2.assign(nP, 0.0);
+        nC2H4.assign(nP, 0.0);
+        nC2H6.assign(nP, 0.0);
 
-        T.assign(nz, 0.0);
+        ne.assign(nP, 0.0f);
+        nH3p.assign(nP, 0.0f);
+        nCH5p.assign(nP, 0.0f);
+        nC3Hnp.assign(nP, 0.0f);
+
+        T.assign(nP, 0.0);
     }
 
     // Apply optional overrides init(). Base implementation applies only generic knobs.
@@ -139,9 +142,16 @@ struct World1D {
     void init() {
         populate();
         validate();
+        std::cout << "World initialized with " << nP << " pressure levels from " << P0 << " to " << P1 << " Pa." << std::endl;
+        std::cout << "Altitude range: " << Z0/1e3 << " km to " << Z1/1e3 << " km." << std::endl;
+
+        // Copy all lower edges
+        Z_edges = Z;
+         // Infer the final upper edge from the last spacing
+        const float dz_top = Z.back() - Z[nz - 2];
+        Z_edges.push_back(Z.back() + dz_top);
+        
     }
-
-
 
 
     void write_species_densities(const std::string& output_file) const {
@@ -152,7 +162,8 @@ struct World1D {
         }
 
         // Write header
-        file << std::left 
+        file << std::left
+            
              << std::setw(12) << "z_m"
              << std::setw(12) << "nH2"
              << std::setw(12) << "nCH4"
@@ -163,10 +174,13 @@ struct World1D {
 
 
         // Write data rows
-        for (int i = 0; i < nz; ++i) {
+        for (int i = 0; i < nP; ++i) {
             file << std::left
+                <<  std::setw(12) << P[i]
                  << std::setw(12) << Z[i]
                  << std::setw(12) << nH2[i]
+                 << std::setw(12) << nHe[i]
+                 << std::setw(12) << nH[i]
                  << std::setw(12) << nCH4[i]
                  << std::setw(12) << nC2H2[i]
                  << std::setw(12) << nC2H4[i]
@@ -181,17 +195,19 @@ protected:
 
     // Optional sanity checks
     virtual void validate() const {
-        if (static_cast<int>(Z.size()) != nz)   throw std::runtime_error("World1D: Z wrong size");
-        if (static_cast<int>(nH2.size()) != nz) throw std::runtime_error("World1D: nH2 wrong size");
-        if (static_cast<int>(nCH4.size()) != nz) throw std::runtime_error("World1D: nCH4 wrong size");
-        if (static_cast<int>(nC2H2.size()) != nz) throw std::runtime_error("World1D: nC2H2 wrong size");
-        if (static_cast<int>(nC2H4.size()) != nz) throw std::runtime_error("World1D: nC2H4 wrong size");
-        if (static_cast<int>(nC2H6.size()) != nz) throw std::runtime_error("World1D: nC2H6 wrong size");
-        if (static_cast<int>(ne.size()) != nz)   throw std::runtime_error("World1D: ne wrong size");
-        if (static_cast<int>(nH3p.size()) != nz)  throw std::runtime_error("World1D: nH3p wrong size");
-        if (static_cast<int>(nCH5p.size()) != nz)  throw std::runtime_error("World1D: nCH5p wrong size");
-        if (static_cast<int>(nC3Hnp.size()) != nz)  throw std::runtime_error("World1D: nC3Hnp wrong size");
-        if (static_cast<int>(T.size()) != nz)   throw std::runtime_error("World1D: T wrong size");
+        if (static_cast<int>(Z.size()) != nP)   throw std::runtime_error("World1D: Z wrong size");
+        if (static_cast<int>(nH2.size()) != nP) throw std::runtime_error("World1D: nH2 wrong size");
+        if (static_cast<int>(nHe.size()) != nP) throw std::runtime_error("World1D: nHe wrong size");
+        if (static_cast<int>(nH.size()) != nP)  throw std::runtime_error("World1D: nH wrong size");
+        if (static_cast<int>(nCH4.size()) != nP) throw std::runtime_error("World1D: nCH4 wrong size");
+        if (static_cast<int>(nC2H2.size()) != nP) throw std::runtime_error("World1D: nC2H2 wrong size");
+        if (static_cast<int>(nC2H4.size()) != nP) throw std::runtime_error("World1D: nC2H4 wrong size");
+        if (static_cast<int>(nC2H6.size()) != nP) throw std::runtime_error("World1D: nC2H6 wrong size");
+        if (static_cast<int>(ne.size()) != nP)   throw std::runtime_error("World1D: ne wrong size");
+        if (static_cast<int>(nH3p.size()) != nP)  throw std::runtime_error("World1D: nH3p wrong size");
+        if (static_cast<int>(nCH5p.size()) != nP)  throw std::runtime_error("World1D: nCH5p wrong size");
+        if (static_cast<int>(nC3Hnp.size()) != nP)  throw std::runtime_error("World1D: nC3Hnp wrong size");
+        if (static_cast<int>(T.size()) != nP)   throw std::runtime_error("World1D: T wrong size");
     }
 
     std::string path_join(const std::string& dir, const std::string& file) const {

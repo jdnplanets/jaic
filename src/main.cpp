@@ -42,10 +42,10 @@ int main(int argc, char** argv) {
     cout << endl;
 
     if (argc < 2) {
-        MonoRunSingle(); 
+        // MonoRunSingle(); 
         // MonoRunMultiConstNFlux();
         // MonoRunMultiConstEFlux();
-        // JunoRun();
+        JunoRun();
         // FACrun(); 
         // FACrunAur(); // Run the FAC run for aurora
         // BPLGRunSingle();
@@ -72,6 +72,7 @@ int MonoRunSingle() {
     WorldOverrides o;
     o.Bdipang_deg = 90.0; // magnetic field dip angle in degrees (90 = vertical, 0 = horizontal)
     auto world = make_world("Jupiter", o);
+
     // world->write_species_densities("jupiter_species_densities_newp.dat"); // Write the species densities to a CSV file
     // exit(0);
     // WorldOverrides o;
@@ -86,13 +87,13 @@ int MonoRunSingle() {
         .N = 10000,          // Number of particles
         .Zinit = world->Z1,   // Initial d position in m
         .Einit = E*1e3f,     // Initial energy in eV
-        .runid = "colcounttest"      // Name   
+        .runid = "pgridtest"      // Name   
     };
 
     // a mono‐energetic beam:
     auto src = make_shared<MonoSource>();
-    Precip precip(params, src, *world); // Initialize the precipitation simulation with the world model and source
-    precip.run();
+    // Precip precip(params, src, *world); // Initialize the precipitation simulation with the world model and source
+    // precip.run();
     // precip.runPrimariesOnly(); // Process the primary electrons only
     // precip.runSecondariesOnly();
 
@@ -103,8 +104,8 @@ int MonoRunSingle() {
 
 
     IonDensity iondens(params, src, *world);
-    // iondens.readIonisationRates(params, src, F); // Read the ionization rates from a file
-    iondens.setIonisationRates(precip.qz, F); // Set the ionization rates based on the mixing ratios and the total ionization rate
+    iondens.readIonisationRates(params, src, F); // Read the ionization rates from a file
+    // iondens.setIonisationRates(precip.qz, F); // Set the ionization rates based on the mixing ratios and the total ionization rate
     iondens.run(); // Run the ion density calculation
     cout << "H3+ column density: " << iondens.getH3pColumnDensity() << " cm^-2" << endl;
     Conductivity conduct(params, src, *world);
@@ -112,19 +113,19 @@ int MonoRunSingle() {
     cout << "Pedersen conductance: " << conduct.getConductance() << " mho" << endl;
 
 
-    // H2Column h2col(params, src, *world);
-    // h2col.readExcitationRates(params, src, F); // Read the excitation rates from a file
-    // // h2col.setExcitationRates(precip.exRateB, precip.exRateC, precip.exRateEF, F);
-    // h2col.run(); // Run the H2 column calculations
-    // cout << "Total unabsorbed intensity: " << h2col.getTotalUnabsorbedIntensity() << " kR" << endl;
-    // cout << "Total observed intensity: " << h2col.getTotalObservedIntensity() << " kR" << endl;
-    // cout << "Colour ratio: " << h2col.getColourRatio() << endl;
+    H2Column h2col(params, src, *world);
+    h2col.readExcitationRates(params, src, F); // Read the excitation rates from a file
+    // h2col.setExcitationRates(precip.exRateB, precip.exRateC, precip.exRateEF, F);
+    h2col.run(); // Run the H2 column calculations
+    cout << "Total unabsorbed intensity: " << h2col.getTotalUnabsorbedIntensity() << " kR" << endl;
+    cout << "Total observed intensity: " << h2col.getTotalObservedIntensity() << " kR" << endl;
+    cout << "Colour ratio: " << h2col.getColourRatio() << endl;
 
-    // H3pColumn h3pcol(params, src, *world, true); // true to apply non-LTE scaling factors
-    // h3pcol.run();
-    // cout << "Total H3+ radiance: " << h3pcol.getTotalRadiance() / 1e-6 << " μW m^-2 sr^-1" << endl;
-    // int peakzIndex = h3pcol.getPeakzIndex();
-    // cout << "Peak H3+ emission altitude: " << world->Z[peakzIndex]/1e3 << " km, where T = " << world->T[peakzIndex] << " K" << endl;
+    H3pColumn h3pcol(params, src, *world, true); // true to apply non-LTE scaling factors
+    h3pcol.run();
+    cout << "Total H3+ radiance: " << h3pcol.getTotalRadiance() / 1e-6 << " μW m^-2 sr^-1" << endl;
+    int peakzIndex = h3pcol.getPeakzIndex();
+    cout << "Peak H3+ emission altitude: " << world->Z[peakzIndex]/1e3 << " km, where T = " << world->T[peakzIndex] << " K" << endl;
 
 
     return 0;
@@ -357,9 +358,9 @@ int JunoRun() {
         .N = 100000,          // Number of particles
         .Zinit = world->Z1,       // Initial position in m
         .Einit = 1,        // Initial energy in eV. Not used with this source
-        .runid = "Ebert2019_4b" // Name for the run
+        // .runid = "Ebert2019_4b" // Name for the run
         // .runid = "Ebert2019_4d" // Name for the run
-        // .runid = "Ebert2021_6c" // Name for the run
+        .runid = "Ebert2021_6c" // Name for the run
 
     };
 
@@ -367,14 +368,14 @@ int JunoRun() {
     auto src = make_shared<DataSource>(/*filename*/params.runid + ".txt");
 
     Precip precip(params, src, *world); // Initialize the precipitation simulation with the world model and source
-    // precip.runlite();
+    precip.runlite();
 
     double F = src->getNumberFlux(); // Number flux in cm-2 s-1 from DataSource
     cout << "F = " << F << " cm-2 s-1" << endl;
 
     IonDensity iondens(params, src, *world);
-    iondens.readIonisationRates(params, src, F); // Read the ionization rates from a file
-    // iondens.setIonisationRates(precip.qz, F); // Set the ionization rates based on the mixing ratios and the total ionization rate
+    // iondens.readIonisationRates(params, src, F); // Read the ionization rates from a file
+    iondens.setIonisationRates(precip.qz, F); // Set the ionization rates based on the mixing ratios and the total ionization rate
     iondens.run(); // Run the ion density calculation
     cout << "H3+ column density: " << iondens.getH3pColumnDensity() << " cm^-2" << endl;
     Conductivity conduct(params, src, *world);
@@ -383,8 +384,8 @@ int JunoRun() {
 
 
     H2Column h2col(params, src, *world);
-    h2col.readExcitationRates(params, src, F); // Read the excitation rates from a file
-    // h2col.setExcitationRates(precip.exRateB, precip.exRateC, precip.exRateEF, F);
+    // h2col.readExcitationRates(params, src, F); // Read the excitation rates from a file
+    h2col.setExcitationRates(precip.exRateB, precip.exRateC, precip.exRateEF, F);
     h2col.run(); // Run the H2 column calculations
     cout << "Total unabsorbed intensity: " << h2col.getTotalUnabsorbedIntensity() << " kR" << endl;
     cout << "Total observed intensity: " << h2col.getTotalObservedIntensity() << " kR" << endl;

@@ -35,8 +35,8 @@ public:
 
     int nz;                      // Number of zinx points
     std::vector<float> Z;        // Altitude grid in km
-    float dz;                    // Altitude step in m
-    float dzcm;                  // Altitude step in cm
+    std::vector<float> dz;       // Altitude step in m
+    std::vector<float> dzcm;     // Altitude step in cm
     size_t nw;                   // Number of wavelength points in the output spectrum
     std::vector<double> lambda;  // Wavelength grid in μm
     double obsang = 0;           // Observation angle in degrees (0 = nadir, 90 = limb)
@@ -84,7 +84,7 @@ protected:
 
     // zinx-dependent values
     std::vector<double> n_H3p;                  // H3+ density profile in m^-3
-    std::vector<double> T   ;                   // Temperature profile in K    
+    std::vector<float> T   ;                   // Temperature profile in K    
     std::vector<std::vector<double>> H3pspecvz; // H3+ emission spectrum vs wavelength and altitude, in W m^-2 sr^-1 μm^-1
 
     const World1D &world;                       // Reference to the world model, for access to Z, T, nH3p, etc.

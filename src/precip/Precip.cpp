@@ -22,10 +22,10 @@ and provides methods for running the simulation and processing the results.
 #include <iostream>
 #include <fstream>
 #include <stdexcept>
-#include <numeric> 
+#include <numeric>  // For accumulate
 #include <random>
 #include <sstream>
-#include <iomanip> /
+#include <iomanip> // For std::setw
 #include <algorithm> 
 #include <filesystem>
 #include <vector>
@@ -65,16 +65,18 @@ Precip::Precip(Params params, std::shared_ptr<Source> src_, const World1D &world
     cout << endl;
 
     // Populate the simulation parameters with the relevant world and source parameters
+    p.P0 =      world.P0;   // bottom of domain in Pa
+    p.P1 =      world.P1;   // top of domain in Pa
+    p.nbinsP =  world.nP;   // number of pressure bins
     p.Z1 =      world.Z1;   // Top of the simulation domain in m
     p.Z0 =      world.Z0;   // Bottom of the simulation domain in m
     p.nbinsZ =  world.nz;   // Number of altitude bins
-    p.dz =      world.dz;   // Size of each bin in m
-    p.dzcm =    world.dzcm; // Size of each bin in cm
     p.N =       sp.N;       // Number of particles
     p.Einit =   sp.Einit;   // Initial energy in eV
     p.Zinit =   sp.Zinit;   // Initial position in m
+    p.Z_edges = world.Z_edges.data(); // pointer to altitude bin edges in m, size nz+1
+    
 
-    std::cout << "Simulation domain: " << p.Z0/1e3 << " km to " << p.Z1/1e3 << " km, with " << p.nbinsZ << " bins of size " << p.dz/1e3 << " km" << std::endl;
 
     // Initialize energy grid from simulation parameters defined in simparams.h
     p.update_derived();
@@ -109,6 +111,9 @@ Precip::Precip(Params params, std::shared_ptr<Source> src_, const World1D &world
 
     
     nH2 = world.nH2;
+    Zinx = world.Z;
+    dzcm = world.dzcm;
+    Z_edges = world.Z_edges;
 
 
     // Define vector that holds the cross section data for all collisions
@@ -390,6 +395,7 @@ void Precip::buildAliasTable() {
 }
 
 
+
 void runPrimariesKernel(DeviceArrays darrs, DeviceArrays harrs, SimParams p);
 
 void Precip::processPrimaries(){
@@ -419,6 +425,11 @@ void Precip::processPrimaries(){
 #ifdef USE_CUDA
     DeviceArrays darrs;
     // Allocate and copy host data to device for each array
+
+    size_t size_Zinx   = Zinx.size() * sizeof(float);
+    cudaMalloc((void**)&darrs.Zinx, size_Zinx);
+    cudaMemcpy(darrs.Zinx, Zinx.data(), size_Zinx, cudaMemcpyHostToDevice);
+
     size_t size_nH2    = nH2.size() * sizeof(float);
     cudaMalloc((void**)&darrs.nH2, size_nH2);
     cudaMemcpy(darrs.nH2, nH2.data(), size_nH2, cudaMemcpyHostToDevice);
@@ -491,8 +502,19 @@ void Precip::processPrimaries(){
     cudaMalloc((void**)&darrs.colcount, size_colcount);
     cudaMemcpy(darrs.colcount, colcount.data(), size_colcount, cudaMemcpyHostToDevice);
 
+    // Copy simulation parameter arrays to device
+    float* d_Z_edges = nullptr;
+    size_t size_Z_edges   = world.Z_edges.size() * sizeof(float);
+    cudaMalloc(&d_Z_edges, size_Z_edges);
+    cudaMemcpy(d_Z_edges, world.Z_edges.data(), size_Z_edges, cudaMemcpyHostToDevice);
+
+    SimParams dp = p; // Make a copy of the SimParams struct to pass to the kernel
+    dp.Z_edges = d_Z_edges; // Update the pointer in the struct to point to the device memory
+
     // Launch the CUDA kernel
-    runPrimariesKernel(darrs, harrs, p);
+    runPrimariesKernel(darrs, harrs, dp);
+
+    cudaFree(d_Z_edges); // Needs to be here because the symbol is here
 #endif
 }
 
@@ -506,7 +528,7 @@ void Precip::nionToQion() {
         double dE = p.dE(e);
         for (int z = 0; z < p.nbinsZ; z++) {
             int thisnion = nion[z * p.nbinsE + e];
-            qion1[e][z] = thisnion / static_cast<float>(sp.N) / p.dzcm / dE; // ptle-1 cm-1 s-1 eV-1
+            qion1[e][z] = thisnion / static_cast<float>(sp.N) / dzcm[z] / dE; // ptle-1 cm-1 s-1 eV-1
         }
     }
 
@@ -1072,38 +1094,86 @@ vector<double> Precip::backscatterProbabilityRutherford(){
 
 }
 
-// Helper function to interpolate an array onto a new grid
-template <typename T>
-vector<T> interpolateArray(const std::vector<T>& src, int src_size, float src_dz, int dst_size, float dst_dz) {
-    vector<T> dst(dst_size, T(0));
-    for (int i = 0; i < dst_size; ++i) {
-        float z_new = i * dst_dz;
-        float z_old_idx = z_new / src_dz;
-        int z0 = static_cast<int>(z_old_idx);
-        int z1 = std::min(z0 + 1, src_size - 1);
-        float t = z_old_idx - z0;
-        if (z0 >= 0 && z1 < src_size) {
-            dst[i] = (1.0f - t) * src[z0] + t * src[z1];
-        } else if (z0 >= 0 && z0 < src_size) {
-            dst[i] = src[z0];
-        }
-    }
-    return dst;
-}
-
 // Helper to compute derivatives
 // Uses central difference apart from at the edges, where forward/backward difference is used
-void compute_derivative(const std::vector<double>& arr, std::vector<double>& deriv, double dz) {
+void compute_derivative(const std::vector<double>& arr, const std::vector<float>& dz, std::vector<double>& deriv) {
     size_t n = arr.size();
     for (size_t z = 0; z < n; ++z) {
         if (z == 0) {
-            deriv[z] = (arr[z + 1] - arr[z]) / dz;
+            deriv[z] = (arr[z + 1] - arr[z]) / dz[z];
         } else if (z == n - 1) {
-            deriv[z] = (arr[z] - arr[z - 1]) / dz;
+            deriv[z] = (arr[z] - arr[z - 1]) / dz[z - 1];
         } else {
-            deriv[z] = (arr[z + 1] - arr[z - 1]) / (2.0 * dz);
+            deriv[z] = (arr[z + 1] - arr[z - 1]) / (2.0 * dz[z]);
         }
     }
+}
+
+
+// Helper function to refine the vertical grid by a factor of zfact
+
+struct ZGrid {
+    std::vector<float> Z;        // lower edges, size nbinsZ
+    std::vector<float> Z_edges;  // all edges, size nbinsZ + 1
+    std::vector<float> dz;       // cell widths in m, size nbinsZ
+    std::vector<float> dzcm_z;    // vertical cell widths in cm, size nbinsZ
+    std::vector<float> dzcm_s;    // path lengthcell widths in cm, size nbinsZ
+};
+
+inline ZGrid refineZ(
+    const std::vector<float>& Z_edges_in,
+    int zfact,
+    float sinpsi
+) {
+    const int nz_coarse = static_cast<int>(Z_edges_in.size()) - 1;
+
+    if (nz_coarse <= 0) {
+        throw std::runtime_error("refineZ: need at least one cell");
+    }
+
+    if (zfact <= 0) {
+        throw std::runtime_error("refineZ: zfact must be positive");
+    }
+
+    ZGrid out;
+
+    const int nz_fine = nz_coarse * zfact;
+
+    out.Z.reserve(static_cast<std::size_t>(nz_fine));
+    out.Z_edges.reserve(static_cast<std::size_t>(nz_fine + 1));
+    out.dz.reserve(static_cast<std::size_t>(nz_fine));
+    out.dzcm_z.reserve(static_cast<std::size_t>(nz_fine));
+    out.dzcm_s.reserve(static_cast<std::size_t>(nz_fine));
+
+    for (int z = 0; z < nz_coarse; ++z) {
+        const float z0 = Z_edges_in[z];
+        const float z1 = Z_edges_in[z + 1];
+
+        const float dz_coarse = z1 - z0;
+
+        if (!(dz_coarse > 0.0f)) {
+            throw std::runtime_error(
+                "refineZ: input Z_edges must be strictly increasing"
+            );
+        }
+
+        const float dz_fine = dz_coarse / static_cast<float>(zfact);
+
+        for (int j = 0; j < zfact; ++j) {
+            const float z_lower = z0 + static_cast<float>(j) * dz_fine;
+
+            out.Z.push_back(z_lower);
+            out.Z_edges.push_back(z_lower);
+            out.dz.push_back(dz_fine);
+            out.dzcm_z.push_back(dz_fine * 1.0e2f);
+            out.dzcm_s.push_back(dz_fine * 1.0e2f / sinpsi);
+        }
+    }
+
+    // Final right-hand edge of the top bin
+    out.Z_edges.push_back(Z_edges_in.back());
+
+    return out;
 }
 
 
@@ -1134,8 +1204,8 @@ void Precip::processSecondaries() {
         double E = p.El(e);
 
         for (int z = 0; z < p.nbinsZ; ++z) {
-            total_qion_E += qion1[e][z] * dE * p.dzcm * Ec;
-            qion_E[e]    += qion1[e][z] * p.dzcm;
+            total_qion_E += qion1[e][z] * dE * dzcm[z] * Ec;
+            qion_E[e]    += qion1[e][z] * dzcm[z];
         }
     }
 
@@ -1157,21 +1227,28 @@ void Precip::processSecondaries() {
     // Refined vertical grid
     // -------------------------------------------------------------------------
 
-    float zfact = 5.0f;
-    int zfactint = static_cast<int>(zfact);
+    const int zfactint = 5;
+    float zfact = static_cast<float>(zfactint);
 
-    // Fine vertical grid spacing
-    float dzcm_z = p.dzcm / zfact;
+    ZGrid zg_fine = refineZ(Z_edges, zfactint, sinpsi);
 
-    // Fine path-length spacing along tilted field/beam
-    float dzcm_s = dzcm_z / static_cast<float>(sinpsi);
+    const int nz = static_cast<int>(zg_fine.Z.size());
 
-    int nz = static_cast<int>(p.nbinsZ * zfact);
+    // Lower edges, size nz
+    std::vector<float>& Z_fine = zg_fine.Z;
+
+    // Full edges, size nz + 1
+    std::vector<float>& Z_edges_fine = zg_fine.Z_edges;
+
+    // Widths, size nz
+    std::vector<float>& dz = zg_fine.dz;
+    std::vector<float>& dzcm_z = zg_fine.dzcm_z;
+    std::vector<float>& dzcm_s = zg_fine.dzcm_s; //Fine path-length spacing along tilted field/beam
+
 
 
     // Interpolate world.nH2 onto the refined vertical z grid
-    vector<float> nH2 = interpolateArray(world.nH2, p.nbinsZ, p.dzcm, nz, dzcm_z);
-
+    std::vector<float> nH2 = utils::array::interp<float>(Zinx, world.nH2, Z_fine);
 
     // Compute the backscatter probability for Rutherford scattering as a function of energy
     vector<double> rutherfordBSP = backscatterProbabilityRutherford();
@@ -1209,6 +1286,7 @@ void Precip::processSecondaries() {
 
 
     // Output arrays
+    // phiPlus[e][z], phiMinus[e][z] because innermost loop is over z
     phiPlus.resize(p.nbinsE, vector<double>(nz, 0.0));
     phiMinus.resize(p.nbinsE, vector<double>(nz, 0.0));
 
@@ -1227,8 +1305,6 @@ void Precip::processSecondaries() {
     //
     // Start from the highest energy bin and work downwards.
     // Safe unsigned-downwards loop avoids underflow when e reaches 0.
-    double total_qion_E_refined = 0.0;
-
     for (size_t e = p.nbinsE; e-- > 0; ) {
 
         vector<double> q(nz, 0.0);
@@ -1253,20 +1329,18 @@ void Precip::processSecondaries() {
             qe[z] = qion1[e][z];
         }
 
-        q = interpolateArray(qe, p.nbinsZ, p.dzcm, nz, dzcm_z);
-
-        
-
+        std::vector<float> qf = utils::array::interp<float>(Zinx, qe, Z_fine);
+        q.assign(qf.begin(), qf.end());
 
         // Compute gradients with respect to the tilted path coordinate s.
         //
         // Since neighbouring altitude samples are separated by dz, but the
         // transport coordinate separation is ds = dz/sin(psi), using dzcm_s
         // here gives d/ds = sin(psi) d/dz.
-        compute_derivative(L[e],  dLds,  dzcm_s);
-        compute_derivative(S[e],  dSds,  dzcm_s);
-        compute_derivative(q,     dqds,  dzcm_s);
-        compute_derivative(qm[e], dqmds, dzcm_s);
+        compute_derivative(L[e],  dzcm_s, dLds);
+        compute_derivative(S[e],  dzcm_s, dSds);
+        compute_derivative(q,     dzcm_s, dqds);
+        compute_derivative(qm[e], dzcm_s, dqmds);
 
 
         // Coefficients for the tridiagonal system
@@ -1307,10 +1381,10 @@ void Precip::processSecondaries() {
                 b0 = beta;
             }
 
-            a[z] = 1.0 + alpha * dzcm_s / 2.0;
-            b[z] = beta * dzcm_s * dzcm_s - 2.0;
-            c[z] = 1.0 - alpha * dzcm_s / 2.0;
-            d[z] = -gamma * dzcm_s * dzcm_s;
+            a[z] = 1.0 + alpha * dzcm_s[z] / 2.0;
+            b[z] = beta * dzcm_s[z] * dzcm_s[z] - 2.0;
+            c[z] = 1.0 - alpha * dzcm_s[z] / 2.0;
+            d[z] = -gamma * dzcm_s[z] * dzcm_s[z];
         }
 
 
@@ -1334,7 +1408,7 @@ void Precip::processSecondaries() {
                      + q[z] / (2.0 * mu)
                      + qp[e][z] / mu;
 
-            double x = A * dzcm_s;
+            double x = A * dzcm_s[z];
 
             if (x > 50.0) x = 50.0; // Limit optical depth to avoid overflow
 
@@ -1399,10 +1473,10 @@ void Precip::processSecondaries() {
 
                 double delE = deltaEs[coll];
 
-                edissE += nH2[z] * (phim[z] + phip[z]) * dE * dzcm_s
+                edissE += nH2[z] * (phim[z] + phip[z]) * dE * dzcm_s[z]
                         * sigsE[e][coll] * delE;
 
-                ediss  += nH2[z] * (phim[z] + phip[z]) * dE * dzcm_s
+                ediss  += nH2[z] * (phim[z] + phip[z]) * dE * dzcm_s[z]
                         * sigsE[e][coll] * delE;
             }
         }
@@ -1458,7 +1532,7 @@ void Precip::processSecondaries() {
 
             for (size_t z = 0; z < nz; ++z) {
 
-                ediss += nH2[z] * (phim[z] + phip[z]) * dE * dzcm_s
+                ediss += nH2[z] * (phim[z] + phip[z]) * dE * dzcm_s[z]
                        * sigSink[coll][e] * p.Ec(e);
             }
         }
@@ -1474,124 +1548,52 @@ void Precip::processSecondaries() {
 
     for (size_t z = 0; z < nz; ++z) {
         E_low += (phiMinus[0][z] + phiPlus[0][z])
-               * p.dE(0) * p.Ec(0) * dzcm_s;
+               * p.dE(0) * p.Ec(0) * dzcm_s[z];
     }
+    
 
     // -------------------------------------------------------------------------
-    // Rebin qion2, phiPlus, phiMinus back onto the original vertical z axis.
+    // Reinterpolate qion2, phiPlus, phiMinus, exRates2 back onto the original vertical z axis.
     // -------------------------------------------------------------------------
+    std::vector<std::vector<double>> qion2_coarse;
+    std::vector<std::vector<double>> phiPlus_coarse; 
+    std::vector<std::vector<double>> phiMinus_coarse;
+    std::vector<std::vector<std::vector<double>>> exRates2_coarse;
 
-    auto fine_to_coarse_z = [&](int fine_z) -> int {
-        float z_fine = fine_z * dzcm_z;
-        int coarse_z = static_cast<int>(z_fine / p.dzcm);
-        return std::min(coarse_z, p.nbinsZ - 1);
-    };
+    qion2_coarse.resize(p.nbinsE, vector<double>(p.nbinsZ, 0.0));
+    phiPlus_coarse.resize(p.nbinsE, vector<double>(p.nbinsZ, 0.0));
+    phiMinus_coarse.resize(p.nbinsE, vector<double>(p.nbinsZ, 0.0));
+    exRates2_coarse.resize(p.nCollisions, vector<vector<double>>(p.nbinsZ, vector<double>(p.nbinsE, 0.0)));
 
-    float dz_fine   = dzcm_z;
-    float dz_coarse = p.dzcm;
-
-
-    // -------------------------------------------------------------------------
-    // Rebin qion2
-    // -------------------------------------------------------------------------
-
-    vector<vector<double>> acc(p.nbinsE, vector<double>(p.nbinsZ, 0.0));
-
-    // Accumulate fine -> coarse vertical integral
-    for (int e = 0; e < p.nbinsE; ++e) {
-        for (int zf = 0; zf < nz; ++zf) {
-            int zc = fine_to_coarse_z(zf);
-            acc[e][zc] += qion2[e][zf] * dz_fine;
-        }
-    }
-
-    // Resize qion2 to the original vertical grid and divide by coarse cell width
-    qion2.assign(p.nbinsE, vector<double>(p.nbinsZ, 0.0));
 
     for (int e = 0; e < p.nbinsE; ++e) {
-        for (int zc = 0; zc < p.nbinsZ; ++zc) {
-            qion2[e][zc] = acc[e][zc] / dz_coarse;
+        qion2_coarse[e] =
+            utils::array::interp<double>(Z_fine, qion2[e], Zinx);
+        phiPlus_coarse[e] =
+            utils::array::interp<double>(Z_fine, phiPlus[e], Zinx);
+        phiMinus_coarse[e] =
+            utils::array::interp<double>(Z_fine, phiMinus[e], Zinx);
+    }
+
+    std::vector<double> er(nz, 0.0);
+    for (int coll = 0; coll < p.collisionCount; ++coll) {
+        for (int e = 0; e < p.nbinsE; ++e) {
+            for (int z = 0; z < nz; ++z) {
+                er[z] = exRates2[coll][z][e];
+            }
+            std::vector<double> er_coarse =
+                utils::array::interp<double>(Z_fine, er, Zinx);
+            for (int z = 0; z < p.nbinsZ; ++z) {
+                exRates2_coarse[coll][z][e] = er_coarse[z];
+            }
         }
     }
 
 
-    // -------------------------------------------------------------------------
-    // Rebin phiPlus and phiMinus from [E][fine z] to [E][coarse z]
-    // -------------------------------------------------------------------------
-
-    auto rebin_phi = [&](vector<vector<double>>& phi) {
-
-        vector<vector<double>> rebinned(p.nbinsE, vector<double>(p.nbinsZ, 0.0));
-        vector<vector<int>> counts(p.nbinsE, vector<int>(p.nbinsZ, 0));
-
-        for (int e = 0; e < p.nbinsE; ++e) {
-            for (int zf = 0; zf < nz; ++zf) {
-
-                int zc = fine_to_coarse_z(zf);
-
-                rebinned[e][zc] += phi[e][zf];
-                counts[e][zc]++;
-            }
-        }
-
-        phi.assign(p.nbinsE, vector<double>(p.nbinsZ, 0.0));
-
-        for (int e = 0; e < p.nbinsE; ++e) {
-            for (int zc = 0; zc < p.nbinsZ; ++zc) {
-
-                if (counts[e][zc] > 0) {
-                    phi[e][zc] = rebinned[e][zc]
-                               / static_cast<double>(counts[e][zc]);
-                }
-                else {
-                    phi[e][zc] = 0.0;
-                }
-            }
-        }
-    };
-
-    rebin_phi(phiPlus);
-    rebin_phi(phiMinus);
-
-
-
-    // -------------------------------------------------------------------------
-    // Rebin exRates2 from [collision][fine z][E] to [collision][coarse z][E]
-    // -------------------------------------------------------------------------
-
-    auto rebin_exRates = [&](vector<vector<vector<double>>>& exRates) {
-
-        vector<vector<vector<double>>> rebinned(p.nCollisions, vector<vector<double>>(p.nbinsZ, vector<double>(p.nbinsE, 0.0)));
-        vector<vector<int>> counts(p.nCollisions, vector<int>(p.nbinsZ, 0));
-
-        for (int coll = 0; coll < p.nCollisions; ++coll) {
-            for (int zf = 0; zf < nz; ++zf) {
-                int zc = fine_to_coarse_z(zf);
-                for (int e = 0; e < p.nbinsE; ++e) {
-                    rebinned[coll][zc][e] += exRates[coll][zf][e];
-                }
-                counts[coll][zc]++;
-            }
-        }
-
-        exRates.assign(p.nCollisions, vector<vector<double>>(p.nbinsZ, vector<double>(p.nbinsE, 0.0)));
-
-        for (int coll = 0; coll < p.nCollisions; ++coll) {
-            for (int zc = 0; zc < p.nbinsZ; ++zc) {
-                for (int e = 0; e < p.nbinsE; ++e) {
-                    if (counts[coll][zc] > 0) {
-                        exRates[coll][zc][e] = rebinned[coll][zc][e]
-                                            / static_cast<double>(counts[coll][zc]);
-                    }
-                    else {
-                        exRates[coll][zc][e] = 0.0;
-                    }
-                }
-            }
-        }
-    };
-
-    rebin_exRates(exRates2);
+    qion2 = std::move(qion2_coarse);
+    phiPlus = std::move(phiPlus_coarse);
+    phiMinus = std::move(phiMinus_coarse);
+    exRates2 = std::move(exRates2_coarse);
 
 
 } // End of processSecondaries
@@ -1641,7 +1643,7 @@ void Precip::combinePrimarySecondary() {
         for (int z = 0; z < p.nbinsZ; ++z) {
             for (int e = 0; e < p.nbinsE; ++e) {
                 int thisnex = colcount[coll * p.nbinsZ * p.nbinsE + z * p.nbinsE + e];
-                float exRate1 = static_cast<float>(thisnex) / static_cast<float>(sp.N) / p.dzcm; // cm-3 s-1
+                float exRate1 = static_cast<float>(thisnex) / static_cast<float>(sp.N) / dzcm[z]; // cm-3 s-1
                 exRates[coll][z][e] = exRate1 + exRates2[coll][z][e]; // cm-3 s-1
             }
         }
@@ -1654,7 +1656,9 @@ void Precip::combinePrimarySecondary() {
             exRateC[z][e]  = exRates[p.excitation_singlet_C][z][e];
             exRateEF[z][e] = exRates[p.excitation_singlet_EF][z][e];
         }
+
     }
+
 
 }
 
@@ -1668,27 +1672,6 @@ void Precip::sumQionOverE(){
     }
 }
 
-void Precip::writeSecQionToFile() {
-    stringstream ss;
-    string suf = src->label(sp);
-    ss << outdir << "secqione_" << suf << ".dat";
-    string secqionfilename = ss.str();
-    ofstream qionfile(secqionfilename, ios::trunc);
-    if (qionfile.is_open()) {   
-        for (int e = 0; e < p.nbinsE; e++) {
-            for (int z = 0; z < p.nbinsZ; z++) {
-                qionfile << setw(2) << qion2[e][z] << " ";
-            }
-            qionfile << endl;
-        }
-        qionfile.close();
-    } else {
-        cout << "Unable to open file for writing qion data" << endl;
-    }
-    cout << "Wrote qion2 to " << secqionfilename << "\n";
-
-
-}
 
 
 void Precip::writeQionToFile(bool primariesOnly) {
@@ -1700,15 +1683,15 @@ void Precip::writeQionToFile(bool primariesOnly) {
     std::vector<utils::io::MetaLine> meta = {
         {"run_ID", sp.runid},
         {"quantity", "qion[e][z]"},
-        {"layout", "rows=e_index (0..nbinsE-1), cols=z_index (0..nbinsZ-1)"},
+        {"layout", "rows=e_index (0..nbinsE-1), cols=P_index (0..nbinsP-1)"},
         {"nbinsE", std::to_string(p.nbinsE)},
         {"Egrid_type", energyGrid.typestring()},
         {"Emin (eV)", std::to_string(p.E0)},
         {"Emax (eV)", std::to_string(p.Emax)},
-        {"nbinsZ", std::to_string(p.nbinsZ)},
-        {"Zgrid_type", "linear"},
-        {"Zmin (m)", std::to_string(p.Z0)},
-        {"Zmax (m)", std::to_string(p.Z1)},
+        {"nbinsP", std::to_string(p.nbinsP)},
+        {"Pgrid_type", "logarithmic"},
+        {"P0 (Pa)", std::to_string(p.P0)},
+        {"P1 (Pa)", std::to_string(p.P1)},
         {"units", "cm-1 eV-1"},
     };
 
@@ -1744,10 +1727,13 @@ void Precip::writeQzToFile(bool primariesOnly) {
         {"quantity", "qion"},
         {"units", " cm-1"},
         {"source_label", suf},
-        {"nbinsZ", std::to_string(p.nbinsZ)}
+        {"nbinsP", std::to_string(p.nbinsP)},
+        {"Pgrid_type", "logarithmic"},
+        {"P0 (Pa)", std::to_string(p.P0)},
+        {"P1 (Pa)", std::to_string(p.P1)},
     };
 
-    const std::vector<std::string> cols = {"z [km]", "qion [cm-1]", "qion1 [cm-1]"};
+    const std::vector<std::string> cols = {"P [Pa]", "z [km]", "qion [cm-1]", "qion1 [cm-1]"};
 
     const bool ok = utils::io::write_dat_table_fixed_width(
         filename,
@@ -1756,7 +1742,8 @@ void Precip::writeQzToFile(bool primariesOnly) {
         cols,
         p.nbinsZ,
         [&](int z, std::ostream& os, int w) {
-            os << std::right << std::setw(w) << zToZ(z)/1e3
+            os << std::right << std::setw(w) << world.P[z]
+            << " "        << std::setw(w) << world.Z[z]/1e3
             << " "        << std::setw(w) << qz[z]
             << " "        << std::setw(w) << qz1[z];
         },
@@ -1780,16 +1767,16 @@ void Precip::writeFUVExRatesToFile() {
         {"quantity", "exRate[e][z]"},
         {"states", "B C EF"},
         {"layout",
-         "rows=z_index (0..nbinsZ-1). For each row, energies e=0..nbinsE-1 are written as triplets: "
-         "[B(z,e) C(z,e) EF(z,e)] concatenated across e."},
+         "rows=P_index (0..nbinsP-1). For each row, energies e=0..nbinsE-1 are written as triplets: "
+         "[B(P,e) C(P,e) EF(P,e)] concatenated across e."},
         {"nbinsE", std::to_string(p.nbinsE)},
         {"Egrid_type", energyGrid.typestring()},
         {"Emin (eV)", std::to_string(p.E0)},
         {"Emax (eV)", std::to_string(p.Emax)},
-        {"nbinsZ", std::to_string(p.nbinsZ)},
-        {"Zgrid_type", "linear"},
-        {"Zmin (m)", std::to_string(p.Z0)},
-        {"Zmax (m)", std::to_string(p.Z1)},
+        {"nbinsP", std::to_string(p.nbinsP)},
+        {"Pgrid_type", "logarithmic"},
+        {"P0 (Pa)", std::to_string(p.P0)},
+        {"P1 (Pa)", std::to_string(p.P1)},
         {"units", "cm-1"},
     };
 
@@ -1799,7 +1786,7 @@ void Precip::writeFUVExRatesToFile() {
         meta,
         /*column_names=*/{}, // too many columns to name sensibly
         [&](std::ostream& os) {
-            for (int z = 0; z < p.nbinsZ; ++z) {
+            for (int z = 0; z < p.nbinsP; ++z) {
                 for (int e = 0; e < p.nbinsE; ++e) {
                     os << exRates[p.excitation_singlet_B][z][e]  << " "
                        << exRates[p.excitation_singlet_C][z][e]  << " "
@@ -1822,19 +1809,19 @@ void Precip::writeExRatesToFile() {
 
     std::vector<utils::io::MetaLine> meta = {
         {"run_ID", sp.runid},
-        {"quantity", "exRate[e][z]"},
+        {"quantity", "exRate[e][P]"},
         {"excitations", "all collisions"},
         {"layout",
-         "rows=z_index (0..nbinsZ-1). For each row, energies e=0..nbinsE-1 are written as lists: "
+         "rows=P_index (0..nbinsP-1). For each row, energies e=0..nbinsE-1 are written as lists: "
          "[elastic, ionisation, a, b, c, e, B, C, vibrational, rotational, EF] concatenated across e."},
         {"nbinsE", std::to_string(p.nbinsE)},
         {"Egrid_type", energyGrid.typestring()},
         {"Emin (eV)", std::to_string(p.E0)},
         {"Emax (eV)", std::to_string(p.Emax)},
-        {"nbinsZ", std::to_string(p.nbinsZ)},
-        {"Zgrid_type", "linear"},
-        {"Zmin (m)", std::to_string(p.Z0)},
-        {"Zmax (m)", std::to_string(p.Z1)},
+        {"nbinsP", std::to_string(p.nbinsP)},
+        {"Pgrid_type", "logarithmic"},
+        {"P0 (Pa)", std::to_string(p.P0)},
+        {"P1 (Pa)", std::to_string(p.P1)},
         {"units", "cm-1"},
     };
 
@@ -1844,7 +1831,7 @@ void Precip::writeExRatesToFile() {
         meta,
         /*column_names=*/{}, // too many columns to name sensibly
         [&](std::ostream& os) {
-            for (int z = 0; z < p.nbinsZ; ++z) {
+            for (int z = 0; z < p.nbinsP; ++z) {
                 for (int e = 0; e < p.nbinsE; ++e) {
                     for (int coll = 0; coll < p.nCollisions; ++coll) {
                         os << exRates[coll][z][e] << " ";
@@ -1865,16 +1852,16 @@ void Precip::writePhiToFile(std::vector<std::vector<double>>& phi, const std::st
 
     std::vector<utils::io::MetaLine> meta = {
         {"run_ID", sp.runid},
-        {"quantity", "phi[e][z]"},
-        {"layout", "rows=e_index (0..nbinsE-1), cols=z_index (0..nbinsZ-1)"},
+        {"quantity", "phi[e][P]"},
+        {"layout", "rows=e_index (0..nbinsE-1), cols=P_index (0..nbinsP-1)"},
         {"nbinsE", std::to_string(p.nbinsE)},
         {"Egrid_type", energyGrid.typestring()},
         {"Emin (eV)", std::to_string(p.E0)},
         {"Emax (eV)", std::to_string(p.Emax)},
-        {"nbinsZ", std::to_string(p.nbinsZ)},
-        {"Zgrid_type", "linear"},
-        {"Zmin (m)", std::to_string(p.Z0)},
-        {"Zmax (m)", std::to_string(p.Z1)},
+        {"nbinsP", std::to_string(p.nbinsP)},
+        {"Pgrid_type", "logarithmic"},
+        {"P0 (Pa)", std::to_string(p.P0)},
+        {"P1 (Pa)", std::to_string(p.P1)},
         {"units", "cm-2 s-1 sr-1 eV-1"}
     };
 
@@ -1905,7 +1892,7 @@ void Precip::run() {
     processPrimaries();
     nionToQion();
     writeColcountToFile();
-    processSecondaries();
+    processSecondaries(); 
     // writePhiToFile(phiPlus, "phiPlus.dat");
     // writePhiToFile(phiMinus, "phiMinus.dat");
 

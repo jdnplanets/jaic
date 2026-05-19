@@ -106,13 +106,14 @@ void Conductivity::writeConductivityToFile() const {
     std::vector<utils::io::MetaLine> meta = {
         {"run_ID", sp.runid},
         {"quantity", "Pedersen_conductivity"},
-        {"layout", "rows=z_index (0..nz-1)"},
-        {"nz", std::to_string(world.nz)},
-        {"Z_units", "km"},
+        {"layout", "rows=P_index (0..nP-1)"},
+        {"nP", std::to_string(world.nP)},
+        {"P_units", "Pa"},
         {"conductivity_units", "mho m-1"},
     };
 
     const std::vector<std::string> cols = {
+        "P [Pa]",
         "Z [km]",
         "Sigma_P_H3p [mho m-1]",
         "Sigma_P_CH5p [mho m-1]",
@@ -132,6 +133,7 @@ void Conductivity::writeConductivityToFile() const {
         world.nz,
         [&](int z, std::ostream& os, int w) {
             os << std::right
+               << std::setw(w) << world.P[z] << " "
                << std::setw(w) << world.Z[z]/1e3  << " "
                << std::setw(w) << sigmaP_H3p[z]    << " "
                << std::setw(w) << sigmaP_CH5p[z]   << " "

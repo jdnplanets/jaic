@@ -20,6 +20,7 @@ as well as state variables for the particles being simulated.
 struct DeviceArrays {
 
     // Lookup tables
+    float* Zinx;
     float* nH2; // neutral H2 density in cm^-3
     float* sigmasE;
     float* total_sigma;

@@ -35,9 +35,10 @@ public:
 
     int nz;                    // Number of zinx points
     std::vector<float> Z;      // Altitude grid in km
-    float dz;                  // Altitude step in m
-    float dzcm;                // Altitude step in cm
-    int nE = 500;               // Number of energy bins for the spectrum calculation (not necessarily the same as the number of energy bins in the excitation rates, which are defined by the source)
+    std::vector<float>  dz;                  // Altitude step in m
+    std::vector<float>  dzcm;                // Altitude step in cm
+    int nE = 10;               // Number of energy bins for the spectrum calculation (not necessarily the same as the number of energy bins in the excitation rates, which are defined by the source)
+    // int nE = 20;               // 10 is fine for CR. Increase if very precise details of the spectrum are important
     size_t nw;                 // Number of wavelength points in the output spectrum
     std::vector<double> lambda;// Wavelength grid in Å
     bool absorb;               // Flag to include hydrocarbons in the cross sections
@@ -96,12 +97,12 @@ protected:
     H2Spectrum h2spec;
 
     // zinx-dependent values
-    std::vector<double> n_H2;               // Neutral H2 density in cm^-3      
-    std::vector<double> n_CH4;              // Methane density in cm^-3
-    std::vector<double> n_C2H2;             // Acetylene density in cm^-3
-    std::vector<double> n_C2H4;             // Ethylene density in cm^-3
-    std::vector<double> n_C2H6;             // Ethane density in cm^-3
-    std::vector<double> T   ;               // Temperature in K
+    std::vector<float> n_H2;               // Neutral H2 density in cm^-3      
+    std::vector<float> n_CH4;              // Methane density in cm^-3
+    std::vector<float> n_C2H2;             // Acetylene density in cm^-3
+    std::vector<float> n_C2H4;             // Ethylene density in cm^-3
+    std::vector<float> n_C2H6;             // Ethane density in cm^-3
+    std::vector<float> T   ;               // Temperature in K
     std::vector<std::vector<double>> R_B_in ;  // Excitation rates for the B state, in cm^-3 s^-1, indexed by [z][E] read in
     std::vector<std::vector<double>> R_C_in ;  // Excitation rates for the C state, in cm^-3 s^-1, indexed by [z][E] read in
     std::vector<std::vector<double>> R_E_in ;  // Excitation rates for the E state, in cm^-3 s^-1, indexed by [z][E] read in

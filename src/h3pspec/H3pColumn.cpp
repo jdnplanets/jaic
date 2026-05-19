@@ -161,7 +161,8 @@ void H3pColumn::computeSpectraVsAltitude() {
     for (size_t z = 0; z < nz; z++) {
 
         // if (z != 40) continue;
-        cout << "\rComputing spectrum for z = " << Z[z]/1e3 << " km" << flush;
+        cout << "\rComputing spectrum for P = " << scientific << setprecision(2) << world.P[z] / 1e5 << " bar (" 
+            << fixed << setprecision(2) << Z[z]/1e3 << " km" << ")" << flush;
         vector<double> spec;
         spec.assign(nw, 0.0); // Initialize the spectrum for this altitude
         H3pspec.generate(T[z], n_H3p[z], lambda, spec); // spec in W m^-2 sr^-1 μm^-1 for 1 m slab, lambda in μm
@@ -210,7 +211,7 @@ void H3pColumn::computeEmergentSpectrum(){
     for (size_t w = 0; w < nw; w++) {
         for (size_t z = 0; z < nz; z++) {
             // The contribution from this layer.
-            specout[w] += H3pspecvz[z][w] * dz; // W m^-2 sr^-1 μm^-1
+            specout[w] += H3pspecvz[z][w] * dz[z]; // W m^-2 sr^-1 μm^-1
         }
     }
     specout = H3pspec.convolve_with_gaussian(specout, H3pspec.d_lambda, H3pspec.fwhm); // Convolve the spectrum with a Gaussian kernel
@@ -280,16 +281,17 @@ void H3pColumn::writeVERtoFile() {
     std::vector<utils::io::MetaLine> meta = {
         {"run_ID", sp.runid},
         {"quantity", "H3+ VER"},
-        {"layout", "rows=z_index (0..nz-1)"},
-        {"nz", std::to_string(nz)},
-        {"Zgrid_type", "linear"},
-        {"Zmin (m)", std::to_string(Z.empty() ? 0.0 : Z.front())},
-        {"Zmax (m)", std::to_string(Z.empty() ? 0.0 : Z.back())},
-        {"Z units", "km"},
+        {"layout", "rows=P_index (0..nP-1)"},
+        {"nP", std::to_string(nz)},
+        {"Pgrid_type", "logarithmic"},
+        {"Pgrid_type", "logarithmic"},
+        {"P0 (Pa)", std::to_string(world.P0)},
+        {"P1 (Pa)", std::to_string(world.P1)},
+        {"P units", "Pa"},
         {"VER units", " W m-3 sr-1"} // adjust if different
     };
 
-    const std::vector<std::string> cols = {"Z [km]", "VER [W m-3 sr-1]"};
+    const std::vector<std::string> cols = {"P [Pa]", "Z [km]", "VER [W m-3 sr-1]"};
 
     const int colw = 14;
     const int precision = 6;
@@ -302,6 +304,7 @@ void H3pColumn::writeVERtoFile() {
         static_cast<int>(nz),
         [&](int i, std::ostream& os, int w) {
             os << std::right
+               << std::setw(w) << world.P[i] << " "
                << std::setw(w) << Z[i] / 1e3 << " "
                << std::setw(w) << ver[i];
         },
@@ -332,16 +335,16 @@ void H3pColumn::writeQ10VERtoFile() {
     std::vector<utils::io::MetaLine> meta = {
         {"run_ID", sp.runid},
         {"quantity", "H3+ Q(1,0-) VER"},
-        {"layout", "rows=z_index (0..nz-1)"},
-        {"nz", std::to_string(nz)},
-        {"Zgrid_type", "linear"},
-        {"Zmin (m)", std::to_string(Z.empty() ? 0.0 : Z.front())},
-        {"Zmax (m)", std::to_string(Z.empty() ? 0.0 : Z.back())},
-        {"Z units", "km"},
+        {"layout", "rows=P_index (0..nP-1)"},
+        {"nP", std::to_string(nz)},
+        {"Pgrid_type", "logarithmic"},
+        {"P0 (Pa)", std::to_string(world.P0)},
+        {"P1 (Pa)", std::to_string(world.P1)},
+        {"P units", "Pa"},
         {"VER units", " W m-3 sr-1"} // adjust if different
     };
 
-    const std::vector<std::string> cols = {"Z [km]", "Q(1,0-) VER [W m-3 sr-1]"};
+    const std::vector<std::string> cols = {"P [Pa]", "Z [km]", "Q(1,0-) VER [W m-3 sr-1]"};
 
     const int colw = 14;
     const int precision = 6;
@@ -354,6 +357,7 @@ void H3pColumn::writeQ10VERtoFile() {
         static_cast<int>(nz),
         [&](int i, std::ostream& os, int w) {
             os << std::right
+               << std::setw(w) << world.P[i] << " "
                << std::setw(w) << Z[i] / 1e3 << " "
                << std::setw(w) << q10ver[i];
         },

@@ -87,10 +87,10 @@ H2Column::H2Column(Params params, std::shared_ptr<Source> src_, const World1D &w
         CnHn_xs_data = readCnHnXSectData("interpolated_hydrocarbon_photon_xsects.csv");
 
         for (int i = nz - 2; i >= 0; --i) {
-            col_CH4[i]  = col_CH4[i+1]  + 0.5 * (n_CH4[i]  + n_CH4[i+1])  * dzcm;
-            col_C2H2[i] = col_C2H2[i+1] + 0.5 * (n_C2H2[i] + n_C2H2[i+1]) * dzcm;
-            col_C2H4[i] = col_C2H4[i+1] + 0.5 * (n_C2H4[i] + n_C2H4[i+1]) * dzcm;
-            col_C2H6[i] = col_C2H6[i+1] + 0.5 * (n_C2H6[i] + n_C2H6[i+1]) * dzcm;
+            col_CH4[i]  = col_CH4[i+1]  + 0.5 * (n_CH4[i]  + n_CH4[i+1])  * dzcm[i];
+            col_C2H2[i] = col_C2H2[i+1] + 0.5 * (n_C2H2[i] + n_C2H2[i+1]) * dzcm[i];
+            col_C2H4[i] = col_C2H4[i+1] + 0.5 * (n_C2H4[i] + n_C2H4[i+1]) * dzcm[i];
+            col_C2H6[i] = col_C2H6[i+1] + 0.5 * (n_C2H6[i] + n_C2H6[i+1]) * dzcm[i];
         }
     }
 
@@ -105,37 +105,42 @@ H2Column::H2Column(Params params, std::shared_ptr<Source> src_, const World1D &w
 
 
 void H2Column::rebinExcitationRates(){
-    std::cout << "Rebinning excitation rates from " << energyGrid.nbins << " to " << h2specEGrid.nbins << " energy bins.\n";
+    std::cout << "H2Column: using " << h2specEGrid.nbins << " energy bins.\n";
     std::vector<double> old_Edges = energyGrid.getEdges();
     std::vector<double> new_Edges = h2specEGrid.getEdges();
     R_B.assign(nz, std::vector<double>(h2specEGrid.nbins, 0.0));
     R_C.assign(nz, std::vector<double>(h2specEGrid.nbins, 0.0));
     R_E.assign(nz, std::vector<double>(h2specEGrid.nbins, 0.0));
     for (int z = 0; z < nz; ++z) {
+        // if (z == 100) {
+        //     std::cerr << "z=100 old energy bins: ";
+        //     for (double e : old_Edges) std::cerr << e << ' ';
+        //     std::cerr << "\nz=100 new energy bins: ";
+        //     for (double e : new_Edges) std::cerr << e << ' ';
+        //     std::cerr << "\nz=100 old R_B[100]: ";
+        //     for (double v : R_B_in[z]) std::cerr << v << ' ';
+        //     std::cerr << '\n';
+        // }
         R_B[z] = utils::array::rebin_conservative(old_Edges, R_B_in[z], new_Edges);
         R_C[z] = utils::array::rebin_conservative(old_Edges, R_C_in[z], new_Edges);
         R_E[z] = utils::array::rebin_conservative(old_Edges, R_E_in[z], new_Edges);
+
+        // if (z == 100) {
+        //     std::cerr << "z=100 new R_B[100]: ";
+        //     for (double v : R_B[z]) std::cerr << v << ' ';
+        //     std::cerr << '\n';
+        // }
+
+        
+        
+        for (int e = 0; e < static_cast<int>(R_B[z].size()); ++e) {
+            if (std::isnan(R_B[z][e])) std::cerr << "NaN in R_B[" << z << "][" << e << "]\n";
+            if (std::isnan(R_C[z][e])) std::cerr << "NaN in R_C[" << z << "][" << e << "]\n";
+            if (std::isnan(R_E[z][e])) std::cerr << "NaN in R_E[" << z << "][" << e << "]\n";
+        }
+
     }
-
-    if (!R_B_in.empty() && !R_B.empty()) {
-        const int zrep = nz > 0 ? nz / 2 : 0;
-        const std::vector<double>& oldRow = R_B_in[zrep];
-        const std::vector<double>& newRow = R_B[zrep];
-
-        double oldSum = 0.0;
-        for (double v : oldRow) oldSum += v;
-
-        double newSum = 0.0;
-        for (double v : newRow) newSum += v;
-
-        std::cout << "Representative R_B row (z=" << zrep << ")\n";
-        std::cout << "old R_B row (" << oldRow.size() << " bins): ";
-        for (double v : oldRow) std::cout << v << " ";
-        std::cout << "\nnew R_B row (" << newRow.size() << " bins): ";
-        for (double v : newRow) std::cout << v << " ";
-        std::cout << "\nold sum = " << oldSum << ", new sum = " << newSum << "\n";
-    }
-
+    // exit(0); // Debug: exit after rebinning to check the output
 
 }
 
@@ -259,7 +264,6 @@ void H2Column::readExcitationRates(const Params &params,
         R_E = R_E_in;
     }
 
-
 }
 
 
@@ -270,7 +274,8 @@ void H2Column::computeSpectraVsAltitude() {
     double threshmod = energyGrid.nbins / static_cast<double>(h2specEGrid.nbins); // This is a heuristic threshold modifier to skip energy levels with negligible excitation rates. We scale it by the ratio of the number of energy bins in the input rates to the number of energy bins in the h2spec model, since if we are rebinning from a finer grid
     for (size_t z = 0; z < nz; z++) {
 
-        cout << "\rComputing spectrum for z = " << Z[z]/1e3 << " km" << flush;
+        cout << "\rComputing spectrum for P = " << scientific << setprecision(2) << world.P[z] / 1e5 << " bar (" 
+            << fixed << setprecision(2) << Z[z]/1e3 << " km" << ")" << flush;
         vector<double> spec;
         spec.assign(nw, 0.0); // Initialize the spectrum for this altitude
         size_t nE = R_B[z].size(); // Number of energy levels
@@ -279,7 +284,7 @@ void H2Column::computeSpectraVsAltitude() {
             cerr << "Warning: excitation rates energy axis (" << nE << ") does not match h2specEGrid.nbins (" << h2specEGrid.nbins << ").\n";
         }
         for (size_t e = 0; e < nE; e++) {
-            if (R_B[z][e] < 1e-2 * threshmod) {
+            if (R_B[z][e] < 1e-5 * threshmod) {
                 continue; // Skip if B excitation is negligible
             }
             vector<double> specE;
@@ -289,7 +294,14 @@ void H2Column::computeSpectraVsAltitude() {
 
             // Add the contribution from this energy level to the spectrum
            for (size_t i = 0; i < nw; i++) {
+                if (std::isnan(specE[i])) {
+                    specE[i] = 0.0; // Set NaN values to zero to avoid contaminating the spectrum
+                    // std::cerr << "NaN in specE[" << z << "][" << e << "][" << i << "]\n";
+                    // std::cerr << "T: " << T[z] << ", E: " << E << ", R_B: " << R_B[z][e] << ", R_C: " << R_C[z][e] << ", R_E: " << R_E[z][e] << "\n";
+                    // exit(1);
+                }
                 spec[i] += specE[i];
+                
             }
         }
         h2specvz[z] = spec;
@@ -417,7 +429,7 @@ void H2Column::computeEmergentSpectrum(){
                         / cos(obsang * M_PI / 180);
             }
             // The contribution from this layer.
-            specout[i] += h2specvz[z][i] * exp(-tau) * dzcm; // Convert m to cm. ds?
+            specout[i] += h2specvz[z][i] * exp(-tau) * dzcm[z]; // Convert m to cm. ds?
         }
     }
     specout = h2spec.convolve_with_gaussian(specout, h2spec.d_lambda, h2spec.fwhm); // Convolve the spectrum with a Gaussian kernel
@@ -429,7 +441,8 @@ void H2Column::computeEmergentSpectrum(){
 double H2Column::getTotalUnabsorbedIntensity() {
     double total = 0.0;
     for (size_t z = 0; z < nz; z++) {
-        total += ver[z] * dzcm;
+        total += ver[z] * dzcm[z];
+        // std::cout << z << ": " << ver[z] << " " << dzcm[z] << " " << ver[z] * dzcm[z] << std::endl; // Debug: print the contribution from each layer
     }
     if (total == 0.0) {
         cerr << "Warning: Total intensity is zero, check the model parameters." << endl;
@@ -496,16 +509,16 @@ void H2Column::writeVERtoFile() {
     std::vector<utils::io::MetaLine> meta = {
         {"run_ID", sp.runid},
         {"quantity", "H2 VER"},
-        {"layout", "rows=z_index (0..nz-1)"},
-        {"nz", std::to_string(nz)},
-        {"Zgrid_type", "linear"},
-        {"Zmin (m)", std::to_string(Z.empty() ? 0.0 : Z.front())},
-        {"Zmax (m)", std::to_string(Z.empty() ? 0.0 : Z.back())},
-        {"Z_units", "km"},
+        {"layout", "rows=P_index (0..nP-1)"},
+        {"nP", std::to_string(world.nP)},
+        {"Pgrid_type", "logarithmic"},
+        {"P0 (Pa)", std::to_string(world.P0)},
+        {"P1 (Pa)", std::to_string(world.P1)},
+        {"P_units", "Pa"},
         {"VER_units", "ph cm-3 s-1 radiating into 4π sr"}
     };
 
-    const std::vector<std::string> cols = {"Z [km]", "VER [ph cm-3 s-1]"};
+    const std::vector<std::string> cols = {"P [Pa]", "Z [km]", "VER [ph cm-3 s-1]"};
 
     const int colw = 14;
     const int precision = 6;
@@ -518,6 +531,7 @@ void H2Column::writeVERtoFile() {
         static_cast<int>(nz),
         [&](int i, std::ostream& os, int w) {
             os << std::right
+               << std::setw(w) << world.P[i] << " "
                << std::setw(w) << Z[i] / 1e3 << " "
                << std::setw(w) << ver[i];
         },
@@ -548,16 +562,16 @@ void H2Column::writeVEReVtoFile() {
     std::vector<utils::io::MetaLine> meta = {
         {"run_ID", sp.runid},
         {"quantity", "H2 VER (eV)"},
-        {"layout", "rows=z_index (0..nz-1)"},
-        {"nz", std::to_string(nz)},
-        {"Zgrid_type", "linear"},
-        {"Zmin (m)", std::to_string(Z.empty() ? 0.0 : Z.front())},
-        {"Zmax (m)", std::to_string(Z.empty() ? 0.0 : Z.back())},
-        {"Z_units", "km"},
+        {"layout", "rows=P_index (0..nP-1)"},
+        {"nP", std::to_string(world.nP)},
+        {"Pgrid_type", "logarithmic"},
+        {"P0 (Pa)", std::to_string(world.P0)},
+        {"P1 (Pa)", std::to_string(world.P1)},
+        {"P_units", "Pa"},
         {"VER_units", "eV cm-3 s-1 radiating into 4π sr"}
     };
 
-    const std::vector<std::string> cols = {"Z [km]", "VER [eV cm-3 s-1]"};
+    const std::vector<std::string> cols = {"P [Pa]", "Z [km]", "VER [eV cm-3 s-1]"};
     
     const int colw = 14;
     const int precision = 6;
@@ -570,6 +584,7 @@ void H2Column::writeVEReVtoFile() {
         static_cast<int>(nz),
         [&](int i, std::ostream& os, int w) {
             os << std::right
+               << std::setw(w) << world.P[i] << " "
                << std::setw(w) << Z[i] / 1e3 << " "
                << std::setw(w) << ver_eV[i];
         },

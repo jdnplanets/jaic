@@ -10,7 +10,7 @@ JAIC is an open-source code for modelling electron precipitation and related ion
 
 This repository is archived on **Zenodo**:
 
-- **Zenodo record:** 10.5281/zenodo.18625227
+- **Zenodo record:** 10.5281/zenodo.18625226
 
 ---
 
