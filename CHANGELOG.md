@@ -1,5 +1,10 @@
 # Changelog
 
+
+## v.1.2.1 - 2026-06-04
+### Changed
+- Minor bug fix to correct a floating underflow for high energy electrons in the Precip module
+
 ## v1.2.0 - 2026-05-19
 
 ### Changed
