@@ -15,7 +15,7 @@ preferred-citation:
       given-names: "J. D."
   journal: "Journal of Geophysical Research: Space Physics"
   year: 2026
-  volume: "<volume>"
-  issue: "<issue>"       
-  pages: "<start-end>"   
-  doi: "<10.xxxx/xxxxx>"
+  volume: "131"
+  issue: "6"       
+  pages: "e2026JA035228"   
+  doi: "10.1029/2026JA035228"
