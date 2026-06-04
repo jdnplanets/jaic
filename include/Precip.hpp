@@ -56,6 +56,8 @@ class Precip {
     // simulation variables
     std::vector<float> dt;      // time step in seconds
     std::vector<float> z;       // altitude in m
+    std::vector<int> zcell;     // altitude cell index
+    std::vector<float> zlocal;  // local z coordinate relative to the cell
     std::vector<float> y;       // horizontal position in m (not to be taken literally due to the absence of a magnetic field)
     std::vector<float> vz;      // velocity in z direction in m/s
     std::vector<float> vy;      // velocity in y direction in m/s
@@ -101,6 +103,11 @@ public:
             vy_old = vy[i];
             vz[i] = vz_old * cos(theta) - vy_old * sin(theta);
             vy[i] = vz_old * sin(theta) + vy_old * cos(theta);
+        }
+        // Set initial cell-local z coordinates for the stepping algorithm
+        for (size_t i = 0; i < sp.N; ++i) {
+            zcell[i] = p.Ztoz(z[i]);;
+            zlocal[i] = z[i] - p.Z_edges[zcell[i]];
         }
     }
 

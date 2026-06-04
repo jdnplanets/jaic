@@ -31,17 +31,22 @@ struct DeviceArrays {
 
     //variables
     float* dt;
-    float* z;
+    int* zcell;
+    float* zlocal;
     float* y;
     float* vz;
     float* vy;
     float* E; // energy in eV
     int* alive;
     int* ps; //  1 for primary, 2 for secondary
-
+    // float* zfinal;
+    // float* yfinal;
     int* nion;
     int* nion2;
     int* theta_sampled;
     int* colcount;
+    int* nexB;
+    int* nexC;
+    int* nexEF; // number of excitations to singlet E
 
 };

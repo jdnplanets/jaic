@@ -77,18 +77,36 @@ __device__ float Elost_primaries = 0.0f,
                  Ealive = 0.0f;
 
 
+// Advance the electron's position in z based on its local z position and the distance it travels in this timestep, 
+// handling crossing of cell boundaries. This is done using a while loop to allow for the possibility of crossing multiple cell 
+// boundaries in one step
+__device__ __host__
+inline void advance_z(int& z, float& x, float dz, const SimParams& p)
+{
+    x += dz;
+
+    while (z < p.nbinsZ - 1 && x >= p.dZ(z)) {
+        x -= p.dZ(z);
+        ++z;
+    }
+
+    while (z > 0 && x < 0.0f) {
+        --z;
+        x += p.dZ(z);
+    }
+}
+
 __device__ __host__
 bool test_collision(const float ndens, 
                     const float total_sigma,
                     DeviceArrays a, 
                     const int i) {
 
-    // float v = sqrt(2 * E * eV / m_e); // m/s
-    float gamma = 1.0 + a.E[i] * eV / (m_e * c * c);
-    float v = c * sqrt(1.0 - 1.0 / (gamma * gamma));
+
+    float v = sqrt(a.vz[i] * a.vz[i] + a.vy[i] * a.vy[i]) * 1e2; // cm/s
 
     // Calculate the probability of a collision
-    float arg = ndens * total_sigma * v * 1e2 * a.dt[i]; // ndens in cm-3, sigma in cm2, v in cm/s
+    float arg = ndens * total_sigma * v * a.dt[i]; // ndens in cm-3, sigma in cm2, v in cm/s
     float p_collision = 1 - exp(-arg); // ndens in cm-3, sigma in cm2, v in cm/s
     // Generate a random number
    float r = getRandom(i);
@@ -238,6 +256,7 @@ void ionisation(const int e,
 
     //Record the altitude of the ionisation event and the energy of the ejected electron
     int ej = p.EToe(E_ej);
+    ej = max(0, min(ej, p.nbinsE - 1));
 #ifdef __CUDA_ARCH__
     atomicAdd(&a.nion[z * p.nbinsE + ej], 1);
     atomicAdd(&Elost_primaries, E_ion);
@@ -248,6 +267,7 @@ void ionisation(const int e,
 
     // Elastically scatter the incident electron
     int es = p.EToe(E_scat);
+    es = max(0, min(es, p.nbinsE - 1));
     screened_rutherford_scattering(es, p, a, i);
 
     // Scale the scattered electron velocity to match its new energy
@@ -407,6 +427,7 @@ void rotational(const int e,
     a.colcount[(p.rotational * p.nbinsZ + z) * p.nbinsE + e]++;
 #endif
 }
+
 // **************************************************************************************
 // Main kernel
 // **************************************************************************************
@@ -420,24 +441,36 @@ void processElectron(int i,
     // Step to advance the electron
     float dz_step = a.vz[i] * a.dt[i];
     float dy_step = a.vy[i] * a.dt[i];
+
     float r = getRandom(i);
-    a.z[i] += dz_step * r;
-    a.y[i] += dy_step * r;
+
+    int z_event = a.zcell[i];
+    float x_event = a.zlocal[i];
+
+    advance_z(z_event, x_event, r * dz_step, p);
+    float z_abs_event = p.ztoZ(z_event) + x_event;
+
+    a.y[i] += r * dy_step;
+
+    // Use z_event directly for density/tallies
+    int z = z_event;
  
     // Get the electron's energy
-
     int e = p.EToe(a.E[i]);
-    int z = p.Ztoz(a.z[i]);
+
+    // if (i == 0)
+        // printf("Electron %d: zcell = %f, Z_local = %f km, vz = %f km/s, delz = %e km, E = %f eV, e = %d, z=%d, dt=%e\n", i, a.zcell[i], a.zlocal[i]/1e3, a.vz[i]/1e3, a.vz[i] * a.dt[i]/1e3, a.E[i], e, z, a.dt[i]);
 
     // Check if the electron is still alive. If not, increment the total number of electrons 
     // simulated
     //  
-    if (a.z[i] < 0 || a.z[i] > p.Z1 || a.E[i] < p.Emin || a.y[i] < -20000e3 || a.y[i] > 20000e3) {
+    // if (a.z[i] < 0 || a.z[i] > p.Z1 || a.E[i] < p.Emin || a.y[i] < -20000e3 || a.y[i] > 20000e3) {
+    if (a.zcell[i] < 0 || a.zcell[i] >= p.nbinsZ || a.E[i] < p.Emin || a.y[i] < -20000e3 || a.y[i] > 20000e3) {
         // printf("Electron %d lost: z = %f m, y = %f m, E = %f eV\n", i, a.z[i], a.y[i], a.E[i]);
 #ifdef __CUDA_ARCH__
-        if (a.z[i] < 0.0f) {
+        if (a.zcell[i] < 0) {
             atomicAdd(&N->Nlost_bottom, 1);
-        } else if (a.z[i] > p.Z1) {
+        } else if (a.zcell[i] >= p.nbinsZ) {
             atomicAdd(&N->Nlost_top, 1);
         } else if (a.E[i] < p.Emin) {
             atomicAdd(&N->Nlost_energy, 1);
@@ -449,9 +482,9 @@ void processElectron(int i,
         // Increment the total energy lost by dead primaries:
         atomicAdd(&Edied_primaries, a.E[i]);
 #else
-        if (a.z[i] < 0.0f) {
+        if (a.zcell[i] < 0.0f) {
             N->Nlost_bottom++;
-        } else if (a.z[i] > p.Z1) {
+        } else if (a.zcell[i] >= p.nbinsZ) {
             N->Nlost_top++;
         } else if (a.E[i] < p.Emin) {
             N->Nlost_energy++;
@@ -471,15 +504,12 @@ void processElectron(int i,
     // Linear interpolation
     int e_low = e;
     int e_high = min(e + 1, p.nE - 1);
-    float frac = a.E[i] - (e_low * p.dE(e_low));
+    float frac = a.E[i] - p.El(e_low);
     frac = frac / p.dE(e_low);
     frac = max(0.0f, min(1.0f, frac));
     float totsig_low = a.total_sigma[e_low];
     float totsig_high = a.total_sigma[e_high];
     float totsig = totsig_low + frac * (totsig_high - totsig_low);
-
-    // Get the cross sections for all collision types and the total for this energy
-    // float totsig = a.total_sigma[e];
 
     // Each thread gets its own small array of size p.nCollisions:
     // (small enough to live on the stack)
@@ -489,13 +519,14 @@ void processElectron(int i,
     for (int j = 0; j < p.nCollisions; ++j) {
         int e_low = e;
         int e_high = min(e + 1, p.nE - 1);
-        float frac = a.E[i] - (e_low * p.dE(e_low)); // fractional part within energy bin
+        float frac = a.E[i] - p.El(e_low); // fractional part within energy bin
         frac = frac / p.dE(e_low);
         frac = max(0.0f, min(1.0f, frac));
         float sigma_low = a.sigmasE[e_low * p.nCollisions + j];
         float sigma_high = a.sigmasE[e_high * p.nCollisions + j];
         sigmas_local[j] = sigma_low + frac * (sigma_high - sigma_low);
     }
+
 
     // Check if the electron collides
     bool collision = test_collision(ndens, totsig, a, i);
@@ -544,8 +575,15 @@ void processElectron(int i,
 
     }
 
-    // Advance remainder of the step
-    a.z[i] += (1.0f - r) * dz_step;
+    // Now advance final stored particle state from the original cell-local state
+    int z_final = a.zcell[i];
+    float x_final = a.zlocal[i];
+
+    advance_z(z_final, x_final, dz_step, p);
+
+    a.zcell[i] = z_final;
+    a.zlocal[i] = x_final;
+
     a.y[i] += (1.0f - r) * dy_step;
 
     // Adapt the timestep for the next iteration based on the electron's speed and the collision probability, to improve efficiency.
@@ -736,7 +774,9 @@ void runPrimariesKernel(DeviceArrays d_arrs, DeviceArrays h_arrs, SimParams p) {
     cudaFree(d_arrs.prob);
     cudaFree(d_arrs.alias);
     cudaFree(d_arrs.dt);
-    cudaFree(d_arrs.z);
+    // cudaFree(d_arrs.z);
+    cudaFree(d_arrs.zcell);
+    cudaFree(d_arrs.zlocal);
     cudaFree(d_arrs.y);
     cudaFree(d_arrs.vz);
     cudaFree(d_arrs.vy);

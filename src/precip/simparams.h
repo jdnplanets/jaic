@@ -146,6 +146,8 @@ struct SimParams {
         return Egrid::eTodE_static_typed(e, nbinsE, E0, EgridParam(), egridType);
     }
 
+    // ####################################################################################
+
     // Altitude grid convenience functions (reuse EGRID_HD for host/device compatibility))
 
     // Must be set to point to host memory when called on host,
@@ -176,6 +178,38 @@ struct SimParams {
         }
 
         return lo;
+    }
+
+    EGRID_HD inline float ztoZ(int z) const {
+        if (Z_edges == nullptr || nbinsZ <= 0) return 0.0f;
+
+        if (z < 0) {
+            z = 0;
+        } else if (z >= nbinsZ) {
+            z = nbinsZ - 1;
+        }
+        return Z_edges[z];
+    }
+    EGRID_HD inline float zToZ(int z) const {
+        if (Z_edges == nullptr || nbinsZ <= 0) return 0.0f;
+
+        if (z < 0) {
+            z = 0;
+        } else if (z >= nbinsZ) {
+            z = nbinsZ - 1;
+        }
+        return Z_edges[z];
+    }
+
+    EGRID_HD inline float dZ(int z) const {
+        if (Z_edges == nullptr || nbinsZ <= 0) return 0.0f;
+
+        if (z < 0) {
+            z = 0;
+        } else if (z >= nbinsZ - 1) {
+            z = nbinsZ - 2; // to ensure z+1 is in bounds
+        }
+        return Z_edges[z + 1] - Z_edges[z];
     }
 
 

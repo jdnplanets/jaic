@@ -97,6 +97,8 @@ Precip::Precip(Params params, std::shared_ptr<Source> src_, const World1D &world
     dt = vector<float>(sp.N, 1e-10f);
     colcount = vector<int>(p.nCollisions * p.nbinsZ * p.nbinsE, 0); // collision count [c][z][e] for each collision type, energy bin, and altitude bin
 
+    zcell = vector<int>(p.N, 0); // altitude cell index for each particle
+    zlocal = vector<float>(p.N, 0.0f); // local z coordinate relative to the cell for each particle
     nion = vector<int>(p.nbinsZ * p.nbinsE, 0);
     qion = vector<vector<double>>(p.nbinsE, vector<double>(p.nbinsZ, 0.0));
     qion1 = vector<vector<double>>(p.nbinsE, vector<double>(p.nbinsZ, 0.0));
@@ -114,7 +116,6 @@ Precip::Precip(Params params, std::shared_ptr<Source> src_, const World1D &world
     Zinx = world.Z;
     dzcm = world.dzcm;
     Z_edges = world.Z_edges;
-
 
     // Define vector that holds the cross section data for all collisions
     string sigfile;
@@ -280,6 +281,9 @@ Precip::Precip(Params params, std::shared_ptr<Source> src_, const World1D &world
 
     theta_sampled = vector<int>(p.nTheta * p.nE, 0.0f);
     buildAliasTable();
+    // sampleTheta();
+    // writeThetaToFile();
+    // exit(0); // TEMP
 
 
     deltaEs = vector<float>(p.nCollisions, 0.0f); //eV
@@ -298,6 +302,7 @@ Precip::Precip(Params params, std::shared_ptr<Source> src_, const World1D &world
 
 
     initialisePrimaries();
+    writeSampledPDFToFile();
 
     // Check that the maximum electron energy is less than the Egrid max
     float maxE = *std::max_element(E.begin(), E.end());
@@ -309,7 +314,7 @@ Precip::Precip(Params params, std::shared_ptr<Source> src_, const World1D &world
     // Initialise redistribution matrix for secondary electron energy cascade
     computeSigaEcascade(deltaEs);   
 
- 
+    // exit(0); // TEMP
 
 } // End of Precip constructor
 
@@ -395,6 +400,49 @@ void Precip::buildAliasTable() {
 }
 
 
+// Compute the histogram of velocities sampled by the source and write to a file
+void Precip::writeSampledPDFToFile() {
+
+    vector<int> pdfE = vector<int>(p.nE, 0);
+    for (int i = 0; i < p.N; ++i) {
+        int k = p.EToe(E[i]);
+        pdfE[k] += 1;
+    }
+    stringstream ss;
+    string suf = src->label(sp);
+    ss << outdir << "pdf_" << suf << ".dat";
+    string pdffilename = ss.str();
+    ofstream pdffile(pdffilename, ios::trunc);
+    if (pdffile.is_open()) {   
+            std::vector<utils::io::MetaLine> meta = {
+        {"run_ID", sp.runid},
+        {"quantity", "sampled PDF(E)"},
+        {"units", " eV-1"},
+        {"source_label", suf},
+        {"nbinsE", std::to_string(p.nbinsE)}
+    };
+
+    const std::vector<std::string> cols = {"E [eV]", "PDF(E) [eV^-1]"};
+
+    const bool ok = utils::io::write_dat_table_fixed_width(
+        pdffilename,
+        "Precip model input: E",
+        meta,
+        cols,
+        p.nbinsE,
+        [&](int e, std::ostream& os, int w) {
+            os << std::right << std::setw(w) << p.El(e)
+            << " "        << std::setw(w) << pdfE[e];
+        },
+        /*col_width=*/12,
+        /*precision=*/6
+    );
+
+    if (ok) std::cout << "Wrote sampled PDF to " << pdffilename << "\n";
+    }
+
+}
+
 
 void runPrimariesKernel(DeviceArrays darrs, DeviceArrays harrs, SimParams p);
 
@@ -411,7 +459,9 @@ void Precip::processPrimaries(){
     harrs.prob = &prob[0];
     harrs.alias = &alias[0];
     harrs.dt = &dt[0];
-    harrs.z = &z[0];
+    // harrs.z = &z[0];
+    harrs.zcell = &zcell[0];
+    harrs.zlocal = &zlocal[0];
     harrs.y = &y[0];
     harrs.vz = &vz[0];
     harrs.vy = &vy[0];
@@ -466,9 +516,16 @@ void Precip::processPrimaries(){
 
     // Result arrays
 
-    size_t size_z          = z.size() * sizeof(float);
-    cudaMalloc((void**)&darrs.z, size_z);
-    cudaMemcpy(darrs.z, z.data(), size_z, cudaMemcpyHostToDevice);
+    // size_t size_z          = z.size() * sizeof(float);
+    // cudaMalloc((void**)&darrs.z, size_z);
+    // cudaMemcpy(darrs.z, z.data(), size_z, cudaMemcpyHostToDevice);
+    size_t size_zcell      = zcell.size() * sizeof(int);
+    cudaMalloc((void**)&darrs.zcell, size_zcell);
+    cudaMemcpy(darrs.zcell, zcell.data(), size_zcell, cudaMemcpyHostToDevice);
+
+    size_t size_zlocal     = zlocal.size() * sizeof(float);
+    cudaMalloc((void**)&darrs.zlocal, size_zlocal);
+    cudaMemcpy(darrs.zlocal, zlocal.data(), size_zlocal, cudaMemcpyHostToDevice);
 
     size_t size_y          = y.size() * sizeof(float);
     cudaMalloc((void**)&darrs.y, size_y);
@@ -1094,6 +1151,25 @@ vector<double> Precip::backscatterProbabilityRutherford(){
 
 }
 
+// Helper function to interpolate an array onto a new grid
+// template <typename T>
+// vector<T> interpolateArray(const std::vector<T>& src, int src_size, float src_dz, int dst_size, float dst_dz) {
+//     vector<T> dst(dst_size, T(0));
+//     for (int i = 0; i < dst_size; ++i) {
+//         float z_new = i * dst_dz;
+//         float z_old_idx = z_new / src_dz;
+//         int z0 = static_cast<int>(z_old_idx);
+//         int z1 = std::min(z0 + 1, src_size - 1);
+//         float t = z_old_idx - z0;
+//         if (z0 >= 0 && z1 < src_size) {
+//             dst[i] = (1.0f - t) * src[z0] + t * src[z1];
+//         } else if (z0 >= 0 && z0 < src_size) {
+//             dst[i] = src[z0];
+//         }
+//     }
+//     return dst;
+// }
+
 // Helper to compute derivatives
 // Uses central difference apart from at the edges, where forward/backward difference is used
 void compute_derivative(const std::vector<double>& arr, const std::vector<float>& dz, std::vector<double>& deriv) {
@@ -1550,6 +1626,10 @@ void Precip::processSecondaries() {
         E_low += (phiMinus[0][z] + phiPlus[0][z])
                * p.dE(0) * p.Ec(0) * dzcm_s[z];
     }
+    std::cout << "Energy dissipated: " << ediss << " eV" << std::endl;
+    std::cout << "Energy out the top: " << eoutTop << " eV" << std::endl;
+    std::cout << "Total energy accounted for (dissipation + energy sink + outflow): "
+              << (ediss + eoutTop) << " eV" << std::endl;
     
 
     // -------------------------------------------------------------------------
@@ -1651,14 +1731,16 @@ void Precip::combinePrimarySecondary() {
 
     // Copy exRates into exRateB, exRateC, exRateEF for convenience
     for (int z = 0; z < p.nbinsZ; ++z) {
+        // float sumB = 0.0f;
         for (int e = 0; e < p.nbinsE; ++e) {
             exRateB[z][e]  = exRates[p.excitation_singlet_B][z][e];
             exRateC[z][e]  = exRates[p.excitation_singlet_C][z][e];
             exRateEF[z][e] = exRates[p.excitation_singlet_EF][z][e];
+            // sumB += exRates[p.excitation_singlet_EF][z][e];
         }
-
+        // std::cout << sumB << ", ";
     }
-
+    // std::cout << "\n";
 
 }
 
