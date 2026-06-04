@@ -141,8 +141,7 @@ Neale, Liesl, Steven Miller, and Jonathan Tennyson. ‘Spectroscopic Properties 
 
 ##  Citation
 If you use JAIC in your work, please cite 
-Nichols, J.D., Jupiter's auroral ionosphere: Hybrid Monte Carlo, auroral spectrum and conductivity modeling, J. Geophys. Res. (2026)
-
+Nichols, J. D. (2026). Jupiter's auroral ionosphere: Hybrid Monte Carlo, auroral spectrum and conductivity modeling. Journal of Geophysical Research: Space Physics, 131, e2026JA035228. https://doi. org/10.1029/2026JA035228
 
 ##  License
 MIT License. See LICENSE.txt
