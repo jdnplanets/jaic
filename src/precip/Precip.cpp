@@ -96,9 +96,7 @@ Precip::Precip(Params params, std::shared_ptr<Source> src_, const World1D &world
     // Initialize the simulation variables
     dt = vector<float>(sp.N, 1e-10f);
     colcount = vector<int>(p.nCollisions * p.nbinsZ * p.nbinsE, 0); // collision count [c][z][e] for each collision type, energy bin, and altitude bin
-
-    zcell = vector<int>(p.N, 0); // altitude cell index for each particle
-    zlocal = vector<float>(p.N, 0.0f); // local z coordinate relative to the cell for each particle
+    zerr = vector<float>(p.N, 0.0f); // compensation term for z accumulation
     nion = vector<int>(p.nbinsZ * p.nbinsE, 0);
     qion = vector<vector<double>>(p.nbinsE, vector<double>(p.nbinsZ, 0.0));
     qion1 = vector<vector<double>>(p.nbinsE, vector<double>(p.nbinsZ, 0.0));
@@ -212,8 +210,6 @@ Precip::Precip(Params params, std::shared_ptr<Source> src_, const World1D &world
     }
 
 
-
-
     string scatter_file;
     if (p.decades == 7.0f) {
         scatter_file = "scatter_angle_pdf_1k_10MeV.bin";
@@ -283,7 +279,6 @@ Precip::Precip(Params params, std::shared_ptr<Source> src_, const World1D &world
     buildAliasTable();
     // sampleTheta();
     // writeThetaToFile();
-    // exit(0); // TEMP
 
 
     deltaEs = vector<float>(p.nCollisions, 0.0f); //eV
@@ -313,8 +308,6 @@ Precip::Precip(Params params, std::shared_ptr<Source> src_, const World1D &world
 
     // Initialise redistribution matrix for secondary electron energy cascade
     computeSigaEcascade(deltaEs);   
-
-    // exit(0); // TEMP
 
 } // End of Precip constructor
 
@@ -459,9 +452,8 @@ void Precip::processPrimaries(){
     harrs.prob = &prob[0];
     harrs.alias = &alias[0];
     harrs.dt = &dt[0];
-    // harrs.z = &z[0];
-    harrs.zcell = &zcell[0];
-    harrs.zlocal = &zlocal[0];
+    harrs.z = &z[0];
+    harrs.zerr = &zerr[0];
     harrs.y = &y[0];
     harrs.vz = &vz[0];
     harrs.vy = &vy[0];
@@ -516,16 +508,13 @@ void Precip::processPrimaries(){
 
     // Result arrays
 
-    // size_t size_z          = z.size() * sizeof(float);
-    // cudaMalloc((void**)&darrs.z, size_z);
-    // cudaMemcpy(darrs.z, z.data(), size_z, cudaMemcpyHostToDevice);
-    size_t size_zcell      = zcell.size() * sizeof(int);
-    cudaMalloc((void**)&darrs.zcell, size_zcell);
-    cudaMemcpy(darrs.zcell, zcell.data(), size_zcell, cudaMemcpyHostToDevice);
-
-    size_t size_zlocal     = zlocal.size() * sizeof(float);
-    cudaMalloc((void**)&darrs.zlocal, size_zlocal);
-    cudaMemcpy(darrs.zlocal, zlocal.data(), size_zlocal, cudaMemcpyHostToDevice);
+    size_t size_z          = z.size() * sizeof(float);
+    cudaMalloc((void**)&darrs.z, size_z);
+    cudaMemcpy(darrs.z, z.data(), size_z, cudaMemcpyHostToDevice);
+    
+    size_t size_zerr       = zerr.size() * sizeof(float);
+    cudaMalloc((void**)&darrs.zerr, size_zerr);
+    cudaMemcpy(darrs.zerr, zerr.data(), size_zerr, cudaMemcpyHostToDevice);
 
     size_t size_y          = y.size() * sizeof(float);
     cudaMalloc((void**)&darrs.y, size_y);
@@ -1150,25 +1139,6 @@ vector<double> Precip::backscatterProbabilityRutherford(){
     return backscatterSums;
 
 }
-
-// Helper function to interpolate an array onto a new grid
-// template <typename T>
-// vector<T> interpolateArray(const std::vector<T>& src, int src_size, float src_dz, int dst_size, float dst_dz) {
-//     vector<T> dst(dst_size, T(0));
-//     for (int i = 0; i < dst_size; ++i) {
-//         float z_new = i * dst_dz;
-//         float z_old_idx = z_new / src_dz;
-//         int z0 = static_cast<int>(z_old_idx);
-//         int z1 = std::min(z0 + 1, src_size - 1);
-//         float t = z_old_idx - z0;
-//         if (z0 >= 0 && z1 < src_size) {
-//             dst[i] = (1.0f - t) * src[z0] + t * src[z1];
-//         } else if (z0 >= 0 && z0 < src_size) {
-//             dst[i] = src[z0];
-//         }
-//     }
-//     return dst;
-// }
 
 // Helper to compute derivatives
 // Uses central difference apart from at the edges, where forward/backward difference is used
@@ -1973,11 +1943,7 @@ void Precip::run() {
 
     processPrimaries();
     nionToQion();
-    writeColcountToFile();
     processSecondaries(); 
-    // writePhiToFile(phiPlus, "phiPlus.dat");
-    // writePhiToFile(phiMinus, "phiMinus.dat");
-
     combinePrimarySecondary();
     writeQionToFile(false); // Write qion to a file, false means we write the full qion including secondaries
     sumQionOverE();
@@ -1986,19 +1952,4 @@ void Precip::run() {
     // writeExRatesToFile(); // Uncomment if you want to write all excitation rates to a file
 
 }
-
-void Precip::runlite() {
-
-    
-    processPrimaries();
-    nionToQion();
-    processSecondaries();
-    combinePrimarySecondary();
-    sumQionOverE();
-    writeQzToFile();
-    writeFUVExRatesToFile();
-    // writeExRatesToFile(); // Uncomment if you want to write all excitation rates to a file
-
-}
-
 

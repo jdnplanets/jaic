@@ -39,6 +39,7 @@ struct SimParams {
     float Emax;                                   // top of energy range in eV (edge nbinsE); derived from E0/decades
     static constexpr float decades = 6.0f;        // number of decades in energy range (defines Emax = E0*10^decades)
     static constexpr int nE        = 500;         // Number of energy bins in the energy grid
+    static constexpr int Nmin      = 0;           // Number of electrons left to stop the MC simulation (to avoid wasting time on very low energy electrons)
     EgridType egridType = EgridType::Logarithmic; // type of energy grid (logarithmic or linear)
 
     //Energy grid of input files (precomputed)

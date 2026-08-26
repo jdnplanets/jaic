@@ -9,7 +9,7 @@
 /*
 This file defines the DeviceArrays struct, which contains pointers to arrays used in the GPU computations 
 for the precipitation simulation. These arrays include lookup tables for cross sections and probabilities, 
-as well as state variables for the particles being simulated.
+as well as state variables for the particles being simulated. Variables are defined in Precip.hpp
 */
 
  // device_arrays.h
@@ -20,9 +20,9 @@ as well as state variables for the particles being simulated.
 struct DeviceArrays {
 
     // Lookup tables
-    float* Zinx;
-    float* nH2; // neutral H2 density in cm^-3
-    float* sigmasE;
+    float* Zinx;        // Altiitude grid
+    float* nH2;         // neutral H2 density in cm^-3
+    float* sigmasE;     //  
     float* total_sigma;
     float* sigmas;
     float* prob;
@@ -31,22 +31,20 @@ struct DeviceArrays {
 
     //variables
     float* dt;
-    int* zcell;
-    float* zlocal;
+    float* z;
+    float* zerr;
     float* y;
     float* vz;
     float* vy;
     float* E; // energy in eV
     int* alive;
     int* ps; //  1 for primary, 2 for secondary
-    // float* zfinal;
-    // float* yfinal;
     int* nion;
     int* nion2;
     int* theta_sampled;
     int* colcount;
     int* nexB;
     int* nexC;
-    int* nexEF; // number of excitations to singlet E
+    int* nexEF; // number of excitations to EF state
 
 };

@@ -164,13 +164,17 @@ struct World1D {
         // Write header
         file << std::left
             
-             << std::setw(12) << "z_m"
-             << std::setw(12) << "nH2"
-             << std::setw(12) << "nCH4"
-             << std::setw(12) << "nC2H2"
-             << std::setw(12) << "nC2H4"
-             << std::setw(12) << "nC2H6"
-             << std::setw(12) << "T_K" << "\n";
+            << std::setw(12) << "Pressure(Pa)"
+                << std::setw(12) << "Altitude(m)"
+                << std::setw(12) << "nH2(cm^-3)"
+                << std::setw(12) << "nHe(cm^-3)"
+                << std::setw(12) << "nH(cm^-3)"
+                << std::setw(12) << "nCH4(cm^-3)"
+                << std::setw(12) << "nC2H2(cm^-3)"
+                << std::setw(12) << "nC2H4(cm^-3)"
+                << std::setw(12) << "nC2H6(cm^-3)"
+                << std::setw(12) << "T(K)" 
+                << "\n";
 
 
         // Write data rows

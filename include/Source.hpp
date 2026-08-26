@@ -59,16 +59,24 @@ public:
 protected:
   float Etov(float E) const {
     // Convert energy in eV to velocity in m/s using relativistic formula
-    // float gamma = 1.0f + E * constants::eV / (constants::m_e * constants::c * constants::c);
-    // return constants::c * std::sqrt(1.0f - 1.0f / (gamma * gamma)); // Relativistic
-    return std::sqrt(2*E*constants::eV/constants::m_e); //  Non-rel
+    float gamma = 1.0f + E * constants::eV / (constants::m_e * constants::c * constants::c);
+    return constants::c * std::sqrt(1.0f - 1.0f / (gamma * gamma)); // Relativistic
   }
 
   float vtoE(float v) const {
     // Convert velocity in m/s to energy in eV using relativistic formula
-    // float gamma = 1.0f / std::sqrt(1.0f - v * v / (constants::c * constants::c));
-    // return (gamma - 1.0f) * constants::m_e * constants::c * constants::c / constants::eV; // Relativistic
-    return 0.5*constants::m_e*v*v/constants::eV;   //Non-rel
+    float gamma = 1.0f / std::sqrt(1.0f - v * v / (constants::c * constants::c));
+    return (gamma - 1.0f) * constants::m_e * constants::c * constants::c / constants::eV; // Relativistic
+  }
+
+    float EtovNonRel(float E) const {
+    // Convert energy in eV to velocity in m/s using non-relativistic formula
+    return std::sqrt(2*E*constants::eV/constants::m_e); //  Non-rel
+  }
+
+  float vtoENonRel(float v) const {
+    // Convert velocity in m/s to energy in eV using non-relativistic formula
+    return 0.5f * constants::m_e * v * v / constants::eV;   //Non-rel
   }
 
 };
