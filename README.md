@@ -100,15 +100,17 @@ The output columns and quantity units are given in the metadata at the top of ea
 
 ## Directory layout
 
+```text
 include/        Public headers
 src/            Source code
 bin/            Executables
-obj/            Shared objects and dependancy files
+obj/            Shared objects and dependency files
 data/           Input data tables
 out/            Output directory
 input/          User-supplied electron spectra
 jobs/           HPC submission scripts
 logs/           Running logs if necessary with HPC runs
+```
 
 
 ##  User-supplied spectrum
