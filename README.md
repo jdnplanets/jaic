@@ -90,7 +90,7 @@ Only Precip needs the GPU.
 Outputs are written under:
 ```bash
 ${JAIC_ROOT}/out/<module>/<runid>/
-```bash
+```
 where:
 &lt;module&gt; refers to the JAIC module <precip>, <h2spec> etc.
 &lt;runid&gt; is defined by .runid in the source parameters
