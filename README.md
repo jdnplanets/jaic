@@ -23,32 +23,38 @@ If you are cloning from a mirror:
 ```bash
 git clone https://github.com/jdnplanets/jaic.git
 cd <repo>
-
+```
 
 ### 2) Add the root directory to your environment and add the executable directory to your path, e.g. in a .bashrc file
+```bash
 export JAIC_ROOT=/absolute/path/to/jaic
 PATH="$JAIC_ROOT/.:$JAIC_ROOT/bin/.:$PATH"
-
+```
 ### 3) Build using the makefile. Note running Precip requires a CUDA/GPU build, otherwise use a CPU build
 
 CPU build:
-
+```bash
 make CPU=1
-
+```
 
 CUDA/GPU build:
+```bash
 make
+```
 
 If you swap between these two you will need to include the -B argument to make, to ensure everything is recompiled, e.g.
 
+```bash
 make -B
+```
 
 Debug build:
 
+```bash
 make -B DEBUG=1
 make -B CPU=1 DEBUG=1
-
 cuda-gdb jaic
+```
 
 ### 4) Requirements
 CPU build:
@@ -64,11 +70,14 @@ Note: If you are compiling on a cluster, load the appropriate compiler/CUDA modu
 
 ### 4) Running JAIC
 The main executable is:
+
 bin/jaic
 
 If you have added the bin/ directory to your path the code is run by typing
 
+```bash
 jaic
+```
 
 An example main.cpp file is in the src directory with several sources indicated.
 Precip needs to be run once for a given source, yielding results per primary electron
