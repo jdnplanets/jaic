@@ -14,7 +14,6 @@
 
 #include "WorldFactory.hpp"
 #include "World1D.hpp"
-#include "BrownDwarf.hpp"
 #include "Jupiter.hpp"
 
 #include "NullIonChemistryModel.hpp"
@@ -34,14 +33,8 @@ std::unique_ptr<World1D> make_world(const std::string& name,
     std::unique_ptr<World1D> w;
 
     std::cout << "Making world: " << name << "\n";
-
-    if (name == "BrownDwarf" || name == "Brown Dwarf") {
-        w = std::make_unique<BrownDwarf>(BrownDwarf::Defaults());
-
-        // No chemistry: all ion production becomes H3+.
-        w->ionChemistryModel = std::make_shared<NullIonChemistryModel>();
-
-    } else if (name == "Jupiter") {
+    
+    if (name == "Jupiter") {
         w = std::make_unique<Jupiter>(); // defaults inside class
 
         // H3+ <-> CH5+ chemistry (steady-state, no transport)
